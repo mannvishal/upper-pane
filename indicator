@@ -1,5 +1,5 @@
 //@version=6
-indicator("Vishal's Upper Pane", shorttitle="Upper Pane", overlay=true, max_lines_count=500, max_labels_count=500, max_bars_back=500)
+indicator("Vishal's Upper Pane", shorttitle="Upper Pane", overlay=true, max_lines_count=500, max_labels_count=500, max_bars_back=5000)
 
 // ============================================================================
 //  VISHAL'S UPPER PANE  (formerly "The 200 Line — Trend Deck")
@@ -12,6 +12,23 @@ indicator("Vishal's Upper Pane", shorttitle="Upper Pane", overlay=true, max_line
 //  (retracement from this week's high measured in ADR multiples), and a 0DTE
 //  Regime Score table plus an 11-event 0DTE alert layer built on alert() (zero
 //  plot cost). Each block has its own master checkbox.
+//
+//  v6.33 changes:
+//   • max_bars_back raised 500 -> 5000. DEFENSIVE, and honestly labelled as
+//     such: on 2026-07-28 three of six alerts (TQQQ, SOXL, SPX500) came up
+//     "Stopped — Calculation error" while GOOG/AAPL/META ran, then all six went
+//     Active with no change made, which says the failure was transient — most
+//     likely a server-side recompute on freshly-saved alerts. So this is NOT a
+//     proven fix for that incident.
+//     It is still worth doing. The deck legitimately asks for very deep series
+//     — a 300-week SMA, a 200-month SMA, a fib lookback up to 400 bars — and
+//     when a symbol's history pushes any request.security context past the
+//     buffer, Pine raises a calculation error instead of returning na. A 500-bar
+//     buffer is tight for that, and the cost of 5000 is memory only.
+//     If the error returns, read the actual message from the warning triangle in
+//     the chart legend before changing anything else: "insufficient number of
+//     bars" confirms this diagnosis, RE10140 means the plot budget, and anything
+//     else is a third cause not to be guessed at.
 //
 //  v6.32 changes:
 //   • REGIME GATE DEFAULT is now TVC:VIX, and the input was RENAMED so the new
