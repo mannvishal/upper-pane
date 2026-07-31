@@ -13,6 +13,37 @@ indicator("Vishal's Upper Pane", shorttitle="Upper Pane", overlay=true, max_line
 //  Regime Score table plus an 11-event 0DTE alert layer built on alert() (zero
 //  plot cost). Each block has its own master checkbox.
 //
+//  v6.34 changes:
+//   • THE CLOUD STOPPING HALFWAY ACROSS THE CHART WAS NEVER A BUG. zdPxBars
+//     defaults to 500 and f_iso gates on bar_index >= last_bar_index - zdPxBars.
+//     500 one-minute bars is 8h20m: on an RTH symbol that is 1.3 sessions and
+//     looks like full coverage, but on a 24h CFD it is a third of the day, so
+//     the cloud appeared to start mid-screen. Measured on the 2026-07-30
+//     SPX500 chart: last bar 22:23, cloud began ~13:40-14:05 = 498-523 bars.
+//     Default raised to 1500 and the input RENAMED, because a changed default
+//     cannot reach a chart that has already saved the old one — v6.22's lesson,
+//     applied on purpose rather than learned again.
+//   • HIDE ALL READOUT BOXES — one switch in General Settings that clears all
+//     six tables without touching any of their individual settings. Lines,
+//     clouds, levels, markers and alerts keep working. New input name, so it
+//     takes its default on charts that have saved everything else.
+//   • LATENT OUT-OF-BOUNDS FIXED in the pulse table. It was declared with 6 rows
+//     while the row counter could reach 7 — base 3, then ladder, week high, week
+//     low, raw ADR/ATR. Ticking all four at once wrote past the end of the
+//     table, which is a runtime error, and on an alert that reads as
+//     "Stopped — Calculation error". Now sized 8 (v6.34 adds a row).
+//   • EXPECTED MOVE added: what the options market is CHARGING for, alongside
+//     what the tape has been DELIVERING. Zero plot slots (both band edges are
+//     line.new, like the Saty levels) and zero extra data requests — the implied
+//     vol rides inside the V-BOUNCE gate's request, widened to [open, close].
+//     The row prints the move in points and percent plus its ratio to the daily
+//     ATR, flagged RICH or THIN. That ratio is the only version of "is this
+//     premium worth selling" available without an options chain, which Pine
+//     cannot reach at any subscription level.
+//     HONEST LIMIT: the vol index describes the S&P. On any other symbol the row
+//     goes blank and asks for a typed IV rather than printing a number that does
+//     not apply. There is no free 1-day IV index for single stocks.
+//
 //  v6.33 changes:
 //   • max_bars_back raised 500 -> 5000. DEFENSIVE, and honestly labelled as
 //     such: on 2026-07-28 three of six alerts (TQQQ, SOXL, SPX500) came up
@@ -466,14 +497,17 @@ indicator("Vishal's Upper Pane", shorttitle="Upper Pane", overlay=true, max_line
 //     "Once Per Bar Close" — and each event has its own on/off checkbox in the
 //     settings, so one alert covers the whole deck.
 //
-//  READOUT LAYOUT — four tables, one per screen corner (TradingView allows only
+//  READOUT LAYOUT — six tables, one per screen corner (TradingView allows only
 //  one table per position, so two in the same corner overlap):
-//    Top Center    PULSE — momentum / stretch / used
-//    Top Right     200 LINE / VOL DIAL
-//    Bottom Left   RSI
+//    Top Left      VALUATION & RATES — P/E / fwd P/E / PEG / US 10Y
+//    Top Center    PULSE — momentum / stretch / used / expected move
+//    Top Right     200 LINE / VOL DIAL / RSI
+//    Bottom Left   RSI, only when it is not riding along top-right
 //    Bottom Center 0DTE CONTEXT — score / window / LTF / flag / alerts (1-min)
 //    Bottom Right  0DTE grid                                    (1-min only)
-//  Top Left is left empty on purpose — the chart legend is drawn there.
+//  TradingView draws its LOGO over bottom left and the CHART LEGEND over top
+//  left; those two corners are never quite clean. "HIDE ALL READOUT BOXES" in
+//  General Settings clears the lot in one click.
 //
 //  PLOT BUDGET — the binding constraint on this script. TradingView caps a
 //  script at 64 plot counts and does NOT fail compilation when you exceed it:
@@ -485,10 +519,10 @@ indicator("Vishal's Upper Pane", shorttitle="Upper Pane", overlay=true, max_line
 //  series-coloured argument), plotshape/plotchar=1 (more with series
 //  colour/textcolor), fill()=1 (2 with a series colour), bgcolor=1,
 //  alertcondition()=1. Tables, labels, lines and alert() cost NOTHING — which
-//  is why the fib levels, the Saty levels and every readout are drawn that way.
-//  Now ~59/64 (v6.25 +2 score-to-price lines, v6.29 +1 exhaustion level,
-//  v6.30 +1 the cloud fill) and
-//  request.security 25/40, so there is still room.
+//  is why the fib levels, the Saty levels, the expected-move band and every
+//  readout are drawn that way.
+//  Now ~59/64 (v6.34 adds 0 — the expected move is lines, not plots) and
+//  request.security 32 + request.financial 1 = 33/40, so there is still room.
 //  (The Saty Pivot Ribbon — EMA 8/21/34 with fills — is still a separate
 //   indicator: unlike the ATR levels it needs true plots, roughly 8 counts.)
 // ============================================================================
@@ -500,6 +534,10 @@ src          = input.source(hl2, "Source (clouds)", group=groupGlobal)
 globalOffset = input.int(0, "Global Offset (clouds)", group=groupGlobal)
 showAll      = input.bool(false, "Show All Clouds & Lines", tooltip="Quick toggle to see everything", group=groupGlobal)
 enableAlerts = input.bool(false, "Enable Alerts (C1 Cloud Cross)", group=groupGlobal)
+// ONE SWITCH FOR EVERY READOUT BOX. A new input name, so it takes its default
+// even on a chart that has already saved every other setting — the v6.22 lesson
+// applied deliberately rather than learned again.
+uiHideBoxes  = input.bool(false, "HIDE ALL READOUT BOXES", group=groupGlobal, tooltip="Clears all six tables off the chart in one click — pulse, RSI, 200 Line / vol dial, valuation, 0DTE context and the 0DTE grid — without touching any of their individual settings. Lines, clouds, levels, markers and alerts all keep working. Untick and every box returns exactly as it was.")
 
 showRipster  = input.bool(true, "Ripster Clouds & MTFs (master)", group=groupGlobal)
 showLocal    = input.bool(true, "Show Local EMA Clouds", group=groupGlobal)
@@ -752,7 +790,7 @@ zdSpyTkr   = input.symbol("AMEX:SPY", "…fallback volume symbol", group=group0d
 zdClimaxZ  = input.float(3.0, "Climax volume z ≥", step=0.5, minval=1.0, group=group0dteX)
 zdLtfOn    = input.bool(true, "Longer-TF context row (4H / D / W / M)", group=group0dteX, tooltip="The same score formula on the slow bars — the trend backdrop behind the intraday dial. Context only: it feeds no machine and raises no alert.")
 zdFlagOn   = input.bool(true, "V-BOUNCE flag (−8.5 print on a calm open)", group=group0dteX, tooltip="A hard sell-off print with the volatility gate opening below the threshold marks the V-shaped-recovery day: price often rips back UP, putting the CALL side at multiples of its base breach rate for the rest of the session. Arms once and holds for the day. S&P-only finding — on any other symbol the flag says so rather than pretending.")
-zdVixTkr   = input.symbol("TVC:VIX", "Regime gate symbol (must be REAL-TIME)", group=group0dteX, tooltip="CBOE:VIX1D is the VALIDATED gate and this default is a compromise forced by data entitlements, not a change of mind. Verified 2026-07-27 on a paid TradingView plan: VIX1D charts fine but is DELAYED BY 15 MINUTES, and TradingView refuses to save an alert whose script touches a delayed symbol — the error blames a missing data subscription, which is misleading, because you can open the chart. TVC:VIX is real-time on standard plans and lets the alert save. COST: the flag arms about 3x less often on plain VIX — lift 2.77 [1.03,5.05] vs 3.99 [2.71,5.58] for VIX1D — and the pane labels a fallback gate as weaker-validation on the FLAG row. What you do NOT lose: score_watcher.py pulls VIX1D from Tradier and is unaffected, so the validated V-BOUNCE still runs on the box and Telegram remains the authority on that flag. Set this back to CBOE:VIX1D only if you buy the CBOE Global Indices add-on.")
+zdVixTkr   = input.symbol("TVC:VIX", "Regime gate symbol (must be REAL-TIME)", group=group0dteX, tooltip="CBOE:VIX1D is the VALIDATED gate and this default is a compromise forced by data entitlements, not a change of mind. Verified 2026-07-27 on a paid TradingView plan: VIX1D charts fine but is DELAYED BY 15 MINUTES, and TradingView refuses to save an alert whose script touches a delayed symbol — the error blames a missing data subscription, which is misleading, because you can open the chart. TVC:VIX is real-time on standard plans and lets the alert save. COST: the flag arms about 3x less often on plain VIX — lift 2.77 [1.03,5.05] vs 3.99 [2.71,5.58] for VIX1D — and the pane labels a fallback gate as weaker-validation on the FLAG row. What you do NOT lose: score_watcher.py pulls VIX1D from Tradier and is unaffected, so the validated V-BOUNCE still runs on the box and Telegram remains the authority on that flag. Set this back to CBOE:VIX1D only if you buy the CBOE Global Indices add-on. NOTE v6.34: this same request now also feeds the EXPECTED MOVE block, so whatever you put here is the implied vol that block uses.")
 
 // NOTE ON THE RENAME: the title changed on purpose. A chart keeps every input it
 // has already saved, so a new default cannot reach an existing chart — the same
@@ -783,7 +821,12 @@ zdPxFill   = input.bool(true, "…shade between them (the score cloud)", group=g
 zdPxLine   = input.bool(true, "…draw them as continuous lines", group=group0dteX, tooltip="Plots the two levels as real series, so they run across the chart like a moving average instead of appearing only at the right edge. Lets you see how the trigger moved through the session and how close price came to it. Costs 2 plot slots (the only plot cost in the whole 0DTE half) and is bounded by the history window below.")
 zdPxTh     = input.float(8.5, "…score level to plot (±)", minval=4.5, maxval=10.0, step=0.5, group=group0dteX, tooltip="Which score contour the two lines trace. KEEP THIS EQUAL TO THE C/3 THRESHOLD (8.5 by default) if you want the lines to correspond to the 1/2/3 marks — they are the same event. Raising it to 9.0 or 9.5 pushes the lines further from price, but nothing fires at 9.5, so the line would then be tracking a level the rest of the deck has no opinion about. If the lines feel too close to price, that is usually the tape telling you the score is genuinely near its edge, not a reason to move the goalposts.")
 zdExhPxOn  = input.bool(true, "…and the exhaustion-fire level", group=group0dteX, tooltip="THIS IS A MARKER LOCATION, NOT AN ENTRY. Three separate studies in this project say so: the +/-8.5 reversal entry is dead unconditionally at decade scale (N=3,307, 30-minute mean +0.0 bps, REVERSAL_STUDY_REPORT.md); exhaustion is an extreme MARKER at ~2x time-matched no-skill, explicitly not an entry; and ATR stretch as a filter was directionally right but worth ~2 SPX points, 26% of the typical post-fire move (ATR_STRETCH_REPORT.md). What this line does is show WHERE the 1/2/3 mark would print — the price at which the score recovers by the pullback delta from the episode extreme. Useful for seeing the machinery coming. Trading it as a reversal is the thing that has already been measured and rejected.")
-zdPxBars   = input.int(500, "…history window (bars)", minval=50, maxval=3000, step=50, group=group0dteX, tooltip="How far back the solver runs. It is a BISECTION, not a formula, so every historical bar costs 4 legs x 2 sides x 16 evaluations. 500 bars is a bit over one 1-minute session and costs roughly 64,000 evaluations — nothing. Left ungated across a decade of bars it would be ~100M and would trip Pine's execution limit (RE10140: the script loads, draws nothing). Raise it if you want more history and can afford the wait.")
+// v6.34 — RENAMED so the new default actually lands. The old title had 500
+// saved on every existing chart, and 500 one-minute bars is 8h20m: on a 24h
+// symbol that is a third of the session, which is why the cloud appeared to
+// "start halfway across the screen". It was never a bug — it was this input,
+// working exactly as documented, sized for an RTH chart and then used on a CFD.
+zdPxBars   = input.int(1500, "…how far back to draw the cloud (bars)", minval=50, maxval=5000, step=50, group=group0dteX, tooltip="How far back the solver runs. It is a BISECTION, not a formula: each bar costs 4 call sites x 20 evaluations x 4 legs = 320 leg evaluations. 1500 bars is ~480,000 of those (~10M float ops) and is comfortable. 5000 is ~32M and you will feel the chart load. Left ungated across a decade of 1-minute bars it would be billions and would trip Pine's execution limit (RE10140: the script loads and draws nothing). IF THE CLOUD STOPS PARTWAY ACROSS THE CHART, THIS IS THE NUMBER TO RAISE.")
 
 // ── v6.22: THE MASTER SWITCH IS GONE, DELIBERATELY ───────────────────────────
 // v6.21 flipped the old master to default ON and warned that an already-added
@@ -836,6 +879,30 @@ satyColTrig = input.color(#FDD835, "Trigger", group=groupSaty, inline="sc1")
 satyColMid  = input.color(#42A5F5, "Mid", group=groupSaty, inline="sc2")
 satyColTgt  = input.color(#26A69A, "Target", group=groupSaty, inline="sc2")
 satyColExt  = input.color(#AB47BC, "Extension", group=groupSaty, inline="sc2")
+
+
+// ─── EXPECTED MOVE (what the options market is charging for today) ───────────
+// ATR says what the tape HAS BEEN DOING. The expected move says what options
+// are CHARGING for. Selling premium is only worth doing when the second is
+// bigger than the first, and this is the only way to see that comparison
+// without an options chain — which Pine cannot reach at any subscription level.
+//
+//   1 sigma over N sessions  =  anchor x (IV / 100) x sqrt(N / 252)
+//
+// THE HONEST LIMIT: the volatility index describes the S&P and nothing else. On
+// TSLA or SOXL it is the wrong number entirely, so the row goes blank and asks
+// for that symbol's own IV rather than quietly printing a figure that does not
+// apply. There is no free 1-day IV index for single stocks.
+groupEM    = "Expected Move"
+emOn       = input.bool(true, "Show the expected move", group=groupEM, tooltip="Costs zero plot slots and zero extra data requests — the band is drawn with lines like the Saty levels, and the implied vol rides inside a request this deck was already making.")
+emRow      = input.bool(true, "· row in the pulse box", group=groupEM, inline="emr")
+emLines    = input.bool(true, "· band on the chart", group=groupEM, inline="emr")
+emAnchor   = input.string("Previous close (the pivot)", "Measure it from", options=["Previous close (the pivot)","Current price"], group=groupEM, tooltip="Previous close (default) puts the band on the SAME anchor as the Saty levels, so the expected move and the ±1 ATR target are directly comparable — which is the entire point of carrying both. Current price answers a different question: how far can it still get from here.")
+emDays     = input.float(1.0, "Sessions to expiry", minval=0.05, maxval=60.0, step=0.5, group=groupEM, tooltip="1 = 0DTE. The move scales with the SQUARE ROOT of this, so four sessions is twice a one-session move, not four times.")
+emIvManual = input.float(0.0, "IV % override (0 = use the vol index)", minval=0.0, maxval=500.0, step=0.5, group=groupEM, tooltip="The volatility index describes the S&P. On any other symbol type its own implied vol here — front-month at-the-money IV from your broker, as a whole number (35 means 35%). Left at 0 on a non-S&P symbol the row says so instead of printing a number that does not apply. Settings save per chart layout, so a per-ticker layout keeps its own IV.")
+emRichAt   = input.float(1.10, "Premium is RICH above (× a normal day)", minval=1.0, step=0.05, group=groupEM, tooltip="Colour the row green once the expected move exceeds this multiple of the daily ATR — options are charging more than the tape has been delivering, which is the condition a credit spread wants. Below the reciprocal (0.91x at the default) it flags THIN: you are being underpaid for the risk you are taking.")
+emCol      = input.color(#7E57C2, "Band colour", group=groupEM)
+
 
 // ─── THE 200 LINE (trend regime: index vs its long MA) ───────────────────────
 group200  = "The 200 Line"
@@ -1126,7 +1193,7 @@ rsiLbl    = "RSI " + str.tostring(rsiLen) + " · " + f_tfTxt(rsiTFUsed) + (rsiFo
 rsiReady  = showRSI and not na(rsiVal)
 
 var table rsiTbl = table.new(f_pos(rsiPos), 2, 1, border_width=1)
-if rsiReady and not rsiMerge and barstate.islast
+if rsiReady and not rsiMerge and not uiHideBoxes and barstate.islast
     table.cell(rsiTbl, 0, 0, rsiLbl, text_size=size.small, text_color=color.white, bgcolor=#37474f)
     table.cell(rsiTbl, 1, 0, rsiTxt, text_size=size.small, text_color=txtCol(rsiCol), bgcolor=rsiCol)
 
@@ -1295,6 +1362,48 @@ actLadLbl = satySide == 1 ? "SELL BELOW" : "SELL ABOVE"
 actLadTxt = satySide == 1 ? str.tostring(satyDnT, format.mintick) + " · " + str.tostring(satyDnM, format.mintick) + " · " + str.tostring(satyDnF, format.mintick) : satySide == -1 ? str.tostring(satyUpT, format.mintick) + " · " + str.tostring(satyUpM, format.mintick) + " · " + str.tostring(satyUpF, format.mintick) : ""
 actLadOn  = actLadder and satySide != 0 and satyOk and rthNow
 
+
+// ─── EXPECTED MOVE — CALC + BAND (0 plot slots, 0 extra requests) ────────────
+// This is the V-BOUNCE gate's request, WIDENED rather than duplicated — which
+// is why the block is free. It therefore has to live here, above the gate's own
+// use of zdVixOpen further down.
+//
+// lookahead_on on the OPEN is harmless: a session's open is known at the open,
+// which is why the gate used it. On the CLOSE it genuinely does return future
+// data on historical bars. That is safe ONLY because emVixNow is read nowhere
+// except under barstate.islast — both the band and the row. DO NOT reuse
+// emVixNow anywhere that evaluates on every bar.
+[zdVixOpen, emVixNow] = request.security(zdVixTkr, "D", [open, close], lookahead=barmerge.lookahead_on)
+
+emIsSp   = str.contains(syminfo.ticker, "SPX") or str.contains(syminfo.ticker, "SPY") or (syminfo.type == "futures" and str.startswith(syminfo.ticker, "ES"))
+emIv     = emIvManual > 0 ? emIvManual : (emIsSp ? emVixNow : na)
+emAnch   = emAnchor == "Current price" ? close : satyPiv
+emSig    = na(emIv) or na(emAnch) or emAnch <= 0 ? na : emAnch * (emIv / 100.0) * math.sqrt(emDays / 252.0)
+emUp     = na(emSig) ? na : emAnch + emSig
+emDn     = na(emSig) ? na : emAnch - emSig
+// The comparison worth having: implied (what you are paid) against realised
+// (what the tape actually delivers). Dividing the horizon back out makes the
+// ratio independent of emDays, so it reads the same for 0DTE and for a week.
+emVsAtr  = na(emSig) or not satyOk or satyAtr <= 0 ? na : emSig / (satyAtr * math.sqrt(emDays))
+emVerdict = na(emVsAtr) ? "" : emVsAtr >= emRichAt ? "  RICH" : emVsAtr <= 1.0 / emRichAt ? "  THIN" : ""
+emRowCol = na(emVsAtr) ? #37474f : emVsAtr >= emRichAt ? #00695C : emVsAtr <= 1.0 / emRichAt ? #E65100 : #37474f
+emTxt    = na(emSig) ? (emIsSp ? "no vol data" : "set IV % in settings") : "±" + str.tostring(emSig, format.mintick) + "  (" + str.tostring(emSig / emAnch * 100, "#.00") + "%)" + (na(emVsAtr) ? "" : "  ·  " + str.tostring(emVsAtr, "#.00") + (pulsePlain ? "× a normal day" : "× ATR") + emVerdict)
+
+f_emLine(_show, _y, _txt) =>
+    var line  ln = na
+    var label lb = na
+    if barstate.islast
+        line.delete(ln)
+        label.delete(lb)
+        if _show and not na(_y)
+            ln := line.new(bar_index - 1, _y, bar_index + labelOffset, _y, xloc=xloc.bar_index, color=emCol, style=line.style_dashed, width=1)
+            lb := label.new(bar_index + labelOffset, _y, _txt, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, size=size.small, textcolor=txtCol(emCol), color=emCol)
+    lb
+
+f_emLine(emOn and emLines and not na(emUp), emUp, "EM ↑ " + str.tostring(emUp, format.mintick))
+f_emLine(emOn and emLines and not na(emDn), emDn, "EM ↓ " + str.tostring(emDn, format.mintick))
+
+
 // ─── PULSE READOUT — the one merged box (0 plot slots) ───────────────────────
 pulseTxt = pulseBig ? size.normal : size.small
 pulseLbl = #37474f
@@ -1306,8 +1415,12 @@ pNoData  = pulsePlain ? "no data" : "n/a"
 pRetTxt  = na(adrRet) ? pNoData : (pulsePlain ? str.tostring(math.max(adrRet, 0), "#.0") + " normal days" : str.tostring(math.max(adrRet, 0), "#.00") + " × ADR") + (adrRet >= adrHot ? "  ⚑" : "")
 pUseTxt  = na(satyUsed) ? pNoData : str.tostring(satyUsed, "#") + (pulsePlain ? "% of a day" : "% of ATR")
 
-var table pulseT = table.new(f_pos(pulsePos), 2, 6, border_width=1)
-if pulseOn and barstate.islast
+// 8 rows, not 6: base 3 + expected move + ladder + week high + week low + raw.
+// It was declared 6 while the counter could reach 7, so ticking all the
+// optional rows at once wrote past the end of the table — a runtime error, and
+// on an alert that reads as "Stopped — Calculation error".
+var table pulseT = table.new(f_pos(pulsePos), 2, 8, border_width=1)
+if pulseOn and not uiHideBoxes and barstate.islast
     table.cell(pulseT, 0, 0, syminfo.ticker, text_size=pulseTxt, text_color=color.white, bgcolor=#263238)
     table.cell(pulseT, 1, 0, actHeader ? actTxt : pZoneTxt, text_size=pulseTxt, text_color=actHeader ? actFg : color.white, bgcolor=actHeader ? actBg : satyZCol)
     table.cell(pulseT, 0, 1, pRetLbl, text_size=pulseTxt, text_color=color.white, bgcolor=adrRetCol)
@@ -1315,6 +1428,10 @@ if pulseOn and barstate.islast
     table.cell(pulseT, 0, 2, pUseLbl, text_size=pulseTxt, text_color=color.white, bgcolor=satyUCol)
     table.cell(pulseT, 1, 2, pUseTxt, text_size=pulseTxt, text_color=color.white, bgcolor=satyUCol)
     int _r = 3
+    if emOn and emRow
+        table.cell(pulseT, 0, _r, pulsePlain ? "PRICED FOR" : "EXP MOVE", text_size=pulseTxt, text_color=color.white, bgcolor=emRowCol)
+        table.cell(pulseT, 1, _r, emTxt, text_size=pulseTxt, text_color=color.white, bgcolor=emRowCol)
+        _r += 1
     if actLadOn
         table.cell(pulseT, 0, _r, actLadLbl, text_size=pulseTxt, text_color=color.white, bgcolor=pulseLbl)
         table.cell(pulseT, 1, _r, actLadTxt, text_size=pulseTxt, text_color=color.white, bgcolor=pulseLbl)
@@ -1398,7 +1515,7 @@ vdEff  = tlState == 1 ? vdDial : 0.0
 
 vdRsiHere = rsiReady and rsiMerge
 var table vdT = table.new(f_pos(vdPos), 2, 3, border_width=1)
-if (vdOn or vdRsiHere) and barstate.islast
+if (vdOn or vdRsiHere) and not uiHideBoxes and barstate.islast
     table.clear(vdT, 0, 0, 1, 2)
     int vdRow = 0
     if vdOn
@@ -1430,7 +1547,7 @@ valEpsTtm = request.financial(syminfo.tickerid, "EARNINGS_PER_SHARE_DILUTED", "T
 [val10, val10p] = request.security(valY10Sym, "D", [close, close[1]], ignore_invalid_symbol=true, lookahead=barmerge.lookahead_off)
 
 var table valT = table.new(f_pos(valPos), 2, 4, border_width=1)
-if valOn and barstate.islast
+if valOn and not uiHideBoxes and barstate.islast
     table.clear(valT, 0, 0, 1, 3)
     valPeV     = not na(valEpsTtm) and valEpsTtm > 0 ? close / valEpsTtm : na
     valFwdV    = valFwdEps > 0 ? close / valFwdEps : na
@@ -1535,7 +1652,7 @@ f_zdRow(_row, _tfTxt, _s, _r) =>
     table.cell(zdT, 2, _row, str.tostring(_s, "#.0"), text_color=chart.fg_color, text_size=size.small)
     table.cell(zdT, 3, _row, str.tostring(_r, "#"), text_color=chart.fg_color, text_size=size.small)
 
-if zdLive and barstate.islast
+if zdLive and not uiHideBoxes and barstate.islast
     table.cell(zdT, 0, 0, "TF",     bgcolor=color.new(color.gray, 60), text_color=color.white, text_size=size.small)
     table.cell(zdT, 1, 0, "REGIME", bgcolor=color.new(color.gray, 60), text_color=color.white, text_size=size.small)
     table.cell(zdT, 2, 0, "SCORE",  bgcolor=color.new(color.gray, 60), text_color=color.white, text_size=size.small)
@@ -1796,7 +1913,8 @@ zdLtfUp  = zdLtfN == 4 and nz(zdL1) > 1 and nz(zdL2) > 1 and nz(zdL3) > 1 and nz
 zdLtfDn  = zdLtfN == 4 and nz(zdL1) < -1 and nz(zdL2) < -1 and nz(zdL3) < -1 and nz(zdL4) < -1
 zdLtfTxt = na(zdLtfAvg) ? "n/a" : str.tostring(zdLtfAvg, "#.0") + (zdLtfUp ? "  all-UP" : zdLtfDn ? "  all-DOWN" : "  mixed") + (zdLtfN < 4 ? "  (" + str.tostring(zdLtfN) + "/4 legs)" : "")
 
-zdVixOpen = request.security(zdVixTkr, "D", open, lookahead=barmerge.lookahead_on)
+// zdVixOpen now comes from the widened request in the EXPECTED MOVE block above,
+// which is what keeps the expected move free of any extra data request.
 var bool zdDnPrinted = false
 var bool zdUpPrinted = false
 if zdDayStart
@@ -1949,7 +2067,7 @@ zdAlTxt = zdMute ? "MUTED — nothing will be sent" : (zdAlertE ? "exh 1/2/3" : 
 zdAlDead = zdMute or str.length(zdAlTxt) == 0 or (not zdAlertE and not zdAlertZ and not zdAlertV)
 
 var table zdCtxT = table.new(f_pos(zdCtxPos), 2, 7, border_width=1)
-if zdLive and zdCtxOn and barstate.islast
+if zdLive and zdCtxOn and not uiHideBoxes and barstate.islast
     table.cell(zdCtxT, 0, 0, "0DTE", text_size=size.small, text_color=color.white, bgcolor=#263238)
     table.cell(zdCtxT, 1, 0, str.tostring(zdAvg, "#.0") + "  " + zdRegime, text_size=size.small, text_color=color.white, bgcolor=#263238)
     table.cell(zdCtxT, 0, 1, "WINDOW", text_size=size.small, text_color=color.white, bgcolor=#37474f)
@@ -1963,7 +2081,7 @@ if zdLive and zdCtxOn and barstate.islast
     table.cell(zdCtxT, 1, 4, zdAlDead ? (zdMute ? "MUTED — nothing will be sent" : "none enabled") : zdAlTxt, text_size=size.small, text_color=color.white, bgcolor=zdAlDead ? #B71C1C : #2E7D32)
     if zdPxOn
         table.cell(zdCtxT, 0, 5, "PRICE ALERT AT", text_size=size.small, text_color=color.white, bgcolor=#37474f)
-        table.cell(zdCtxT, 1, 5, "\u2212" + str.tostring(zdPxTh, "#.#") + " @ " + zdPxDnTxt + "   +" + str.tostring(zdPxTh, "#.#") + " @ " + zdPxUpTxt, text_size=size.small, text_color=txtCol(zdPxCol), bgcolor=zdPxCol)
+        table.cell(zdCtxT, 1, 5, "−" + str.tostring(zdPxTh, "#.#") + " @ " + zdPxDnTxt + "   +" + str.tostring(zdPxTh, "#.#") + " @ " + zdPxUpTxt, text_size=size.small, text_color=txtCol(zdPxCol), bgcolor=zdPxCol)
     if zdExhPxOn
         table.cell(zdCtxT, 0, 6, "EXH PRINTS AT", text_size=size.small, text_color=color.white, bgcolor=#37474f)
         table.cell(zdCtxT, 1, 6, zdExhTxt, text_size=size.small, text_color=txtCol(zdExhCol), bgcolor=na(zdPxExh) ? #37474f : zdExhPxCol)
