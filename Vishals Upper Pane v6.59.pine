@@ -1,0 +1,2246 @@
+//@version=6
+// ^^^ THIS IS NOT THE BUILD NUMBER. //@version=6 is the PINE SCRIPT LANGUAGE
+// version — TradingView's compiler dialect. It is 6 because Pine 6 is the
+// current language, it will stay 6 until TradingView ships Pine 7, and editing
+// it would just break the script. Unfortunate coincidence: this deck is also
+// on a 6.x build number, so the two look alike and are completely unrelated.
+//
+// THE BUILD NUMBER IS BELOW, in three places that all move together:
+//   1. the shorttitle on the next line -> shows in the CHART LEGEND, top left
+//   2. ALERTVER  -> stamped into every alert message and the GATE readout row
+//   3. the changelog immediately under this header
+indicator("Vishal's Upper Pane v6.59", shorttitle="Upper Pane v6.59", overlay=true, max_lines_count=500, max_labels_count=500, max_bars_back=5000)
+// ============================================================================
+//  VISHAL'S UPPER PANE  (formerly "The 200 Line — Trend Deck")
+//  An all-in-one overlay: Ripster EMA clouds + MTF clouds, daily SMA/WMA lines,
+//  a 2nd-timeframe MTF SMA set, secular 200W/300W/200M lines, auto fib levels,
+//  SATY ATR LEVELS (the 0DTE day map), the EXPECTED MOVE band, the 200 Line
+//  trend-regime engine, daily 50/200 crosses, an RSI readout, an ADR PULSE
+//  readout, TD Sequential, and the 0DTE Regime Score with its marks, cloud and
+//  alert layer. Each block has its own master checkbox.
+//
+//  v6.59 changes — THE VOLUME CHIP IN PLAIN WORDS:
+//   * Was "300.2K · .41x the 20-bar average · resting · volume". ".41x" reads
+//     as a typo for want of a leading zero; "the 20-bar average" names the
+//     mechanism rather than the meaning; and "resting" was the only word of
+//     judgement in the chip, with no scale to place it against.
+//   * Now "volume 300.2K · 0.4x a normal 1h bar · VERY QUIET", and when a bar
+//     is above the average it also names the side — "BUSY — buyers" — because
+//     that is exactly what the green/red is saying.
+//   * Band words, which are the same thresholds the colour already uses:
+//       under 0.5x  VERY QUIET      1.2 to 2x   BUSY
+//       0.5 to 0.8x QUIET           2 to 3x     HEAVY
+//       0.8 to 1.2x NORMAL          3x and up   HUGE
+//     Only at 1.0x and above does a bar get a colour; the words below that are
+//     degrees of nothing-happening.
+//   * "a normal <tf> bar" is built from f_tfTxt, so it reads "a normal 1h bar"
+//     here and "a normal 5m bar" if you drop down. It is not hardcoded.
+//   * RSI readout and vol dial now default OFF. Those are DEFAULTS, so they do
+//     not reach the chart instance already saved — unticked there by hand.
+//
+//  v6.59 changes — THE VOLUME COLOUR RULE ACTUALLY FIRES NOW:
+//   * OBSERVED ON THE LIVE CHART, not reasoned about: every histogram bar
+//     rendered grey, including bars standing well clear of the volume MA. The
+//     grey/green/red rule is the entire point of the v6.54 rebuild and it was
+//     doing nothing.
+//   * Cause: f_nvCol(_i) read nvVol[_i], nvMA[_i], close[_i] and open[_i]
+//     using the LOOP COUNTER as a history index, from inside a function only
+//     ever called under barstate.islast. The v6.52 band it replaced did the
+//     same indexing INLINE in the loop and coloured fine — that is the single
+//     thing that changed between working and broken.
+//   * Fix: the colour is now a normal global series (nvBarC) evaluated on
+//     every bar, and the loop reads nvBarC[i] the same way it reads nvVol[i].
+//     No dynamic history index inside a conditionally-called function.
+//   * Bar HEIGHTS were always right, which is why the band looked plausible
+//     and the bug survived a code review. Only the colours were wrong.
+//
+//  v6.59 changes — DEFAULTS NOW MATCH THE LIVE CHART:
+//   Read straight off the SMH 1h "Ripster" layout on 27 Oct 2026 and baked in,
+//   amended by what was actually asked for. 16 booleans changed; every other
+//   default already matched, including all numbers, strings and colours.
+//
+//   WHY THIS MATTERS, AND THE ONE THING IT DOES NOT DO: a changed default
+//   CANNOT reach a chart that has already saved that input. These 16 do
+//   nothing to an existing instance. They exist so that a NEW script — the
+//   "Create new -> Indicator" route that escapes the historical-version
+//   banner — comes up correctly configured instead of needing sixteen clicks,
+//   and so that hitting "Defaults" is no longer destructive.
+//
+//   Off by default now: SMA 20, SMA 100, all three MTF clouds, every Saty
+//   display extra (labels, 0.236 triggers, 1 ATR targets, 0.618 mids,
+//   extensions), the RSI ride-along, the expected-move row, the strike
+//   ladder, the valuation box, and the exhaustion 1/2/3 alert.
+//   On by default now: the zone A/B/C alert.
+//   Deliberately left ON though your chart has them off: SMA 150 and the
+//   chart-timeframe 21 EMA — both were asked for and are switched off on the
+//   live chart, so a new script should bring them back.
+//
+//  v6.59 changes — "swings 68%/yr" WAS A BAD LABEL:
+//   * It reads like "gains 68% a year". It is a standard deviation of annual
+//     return, not a return, and a sizing readout must not invite that reading.
+//   * Now stated as the typical DAY: "typical day +/-4.3%". Same number, same
+//     maths — annualised vol divided back by sqrt(252), which cancels to the
+//     raw daily return stdev times leverage. No new data, no new request.
+//   * The jargon view (Plain-English wording OFF) still shows "rv 68%".
+//
+//  v6.59 changes — THE TOP BOXES SAY WHAT THEY MEAN:
+//   * Pulse box trimmed to FELL and MOVED. The ticker/action header is now its
+//     own switch, OFF by default, new title so the default lands.
+//   * Pulse rows are COUNTER-DRIVEN and the table is CLEARED first. They used
+//     to be hardcoded 0/1/2, so hiding a row left a hole; and with no clear, a
+//     row written on an earlier realtime tick stayed behind forever.
+//   * FELL now says how deep in words — normal / getting deep / DEEP / VERY
+//     DEEP — on the SAME thresholds as its background colour, so the two can
+//     never disagree. Previously you had to remember the colour code.
+//   * MOVED reads "% of a normal day" rather than "% of a day".
+//   * The 200 LINE row is no longer welded to the vol dial: separate switch,
+//     OFF by default.
+//   * VOL DIAL in plain English: "88% in · 12% cash   swings ~68%/yr" instead
+//     of "88%  rv 68%", and when the trend says OUT it reads "0% in · 100%
+//     cash  (would be 88%)" so a zero does not look like a broken readout.
+//     Gated on the EXISTING "Plain-English wording" key, which is already ON,
+//     so the new wording needs no settings change.
+//   * Fixed two tooltips left describing the old net-dollar-volume study.
+//
+//  v6.59 changes — THE BAND IS NOW A PLAIN VOLUME HISTOGRAM:
+//   * Bottom-anchored instead of centred on a zero line. Volume is never
+//     negative, so the old centred layout wasted half the band's height.
+//   * Three-state colour, which is the whole point of the rebuild: LIGHT GREY
+//     while a bar rests at or below the volume MA, BRIGHT GREEN above the MA
+//     if the bar closed up, BRIGHT RED above the MA if it closed down. Flat
+//     closes above the MA get slate rather than being counted as buying.
+//   * The 20-period VOLUME MA is drawn across the band as a single polyline.
+//     The line pool is capped at 500 and the bars can use 450 of it, so the MA
+//     had to come from the polyline pool, not the line pool.
+//   * Thickness default 4px, up from 2.
+//   * nvOn now defaults ON, and its title changed, which is the only reason
+//     that default can reach a chart that already saved it OFF. Same for the
+//     direction knob, the thickness and both bright colours — new titles, new
+//     keys, new defaults land. SAVED-INPUT RULE, see the header note.
+//   * HONEST LIMIT, stated plainly: an overlay shares the price scale, so this
+//     band is mapped into a slice of price space. Within the band it does
+//     autoscale to volume (tallest bar in the window touches the ceiling, a 3x
+//     bar is drawn 3x), but it cannot own the full pane height. Nothing on an
+//     overlay can. The full-height version is "Vishal's Volume Pane", which
+//     costs a second indicator slot.
+//
+//  v6.59 changes — A CHART-TIMEFRAME 21 EMA:
+//   * ta.ema(close, 21) on the CHART's own bars — no request.security, no
+//     timeframe multiplier. On a 1-hour chart that is a 21-hour EMA. Every
+//     other MA in this deck is pinned to D/W/M so it reads the same whatever
+//     the chart shows; this one is pinned to the chart instead, which is why
+//     it has its own settings group rather than sitting in "Daily SMA Lines"
+//     where a "21" would read as a daily 21.
+//   * The right-edge tag is built from f_tfTxt(""), so it prints the live
+//     resolution: "21 EMA (1h)" here, "21 EMA (5m)" if you drop down. A
+//     hardcoded "(1h)" would start lying the moment you changed timeframe.
+//   * Electric violet #D500F9, clear of the cyan/yellow/green/blue/purple/red
+//     daily set and of the amber secular lines. Colour and width are inputs.
+//   * ZERO data requests. ONE plot slot: 61 -> 62 of 64.
+//
+//  v6.59 changes — NET DOLLAR VOLUME ON AN OVERLAY:
+//   * volume x price, signed up/down, as a histogram in a band UNDER the
+//     candles. An overlay has one price scale, so a series in billions cannot
+//     share it — the series is rescaled into price space instead, and drawn
+//     with line.new, which costs ZERO plot slots. Still 61/64, still 27+1
+//     requests. The price for it is vertical room, not budget.
+//   * The whole window is drawn on barstate.islast in a loop over history, so
+//     the zero line and the scale are computed ONCE and the baseline is FLAT.
+//     Drawing bar-by-bar against a rolling low gives a wandering baseline and
+//     an unreadable histogram.
+//   * It is a TURNOVER proxy, not fund flow. Creations and redemptions are
+//     issuer data TradingView does not carry.
+//
+//  v6.59 changes — RE10140, AND THE REAL PLOT ARITHMETIC:
+//   * v6.59 raised RE10140: "too many plots (66). The limit is 64." The deck
+//     was sitting at EXACTLY 64 at v6.49 — on the cap, with no headroom — so
+//     the two new SMA plots broke it. Nothing in the source said so, because
+//     the header's estimate (~56) was a hand count and it was wrong by ten.
+//   * WHAT I CUT, and why these two: the DAILY WMA block (2 plots) and the
+//     MTF SMA 2nd-timeframe block (3 plots). Both ship OFF, neither has ever
+//     been on in any chart screenshot from this project, and both are near-
+//     duplicates of the daily SMA set sitting beside them. Removing them also
+//     deletes one request.security call. Net: 66 -> 61, three slots of real
+//     headroom, and nothing visible on the chart changes.
+//   * THE LESSON, written down so it is not re-learned: DO NOT ESTIMATE THE
+//     PLOT COUNT. The only reliable number is the one RE10140 prints. A hand
+//     count mis-weights series colours and silently drifts; this header has
+//     carried a wrong figure since at least v6.34.
+//
+//  v6.59 changes — SMA 10 + SMA 150, AND FIB ACTUALLY OFF:
+//   * SMA 10 and SMA 150 join the daily set, each with its own colour picker
+//     and right-edge tag. Cyan and purple, clear of the existing four.
+//   * THE FIB SWITCH WAS ALREADY false AND IT STILL DREW. That is the saved-
+//     input rule, not a bug: a chart that once had fib ON keeps it ON through
+//     every source update, because TradingView persists every input a chart
+//     has saved and a changed DEFAULT can never reach it. The title is now
+//     "Draw auto fib levels" — a new title is a new key, and a new key does
+//     take its default. Same move that landed zdPxBars and alertsRthOnly.
+//   * ONE DATA REQUEST INSTEAD OF SIX. The six daily MAs were six separate
+//     request.security calls against the SAME symbol on the SAME timeframe.
+//     Bundled into a tuple it is one call, the two new lengths ride along
+//     free, and the budget goes 33 -> 28 of 40. Two plots added, five data
+//     slots freed.
+//
+//  v6.49 changes — EVERY SATY RUNG IS NOW OPTIONAL:
+//   * "0.236 triggers" and "1 ATR targets" join the mid and ext switches, so
+//     the day map can be thinned to just the rungs you trade off. Hiding a
+//     line is display-only — the trigger alerts still arm from the levels.
+//   * Version bumped to match the companion 0DTE Score pane. The pair is meant
+//     to read the same number.
+//
+//  v6.45 changes — ONE CHIP PER BAR, MATCHING THE PANE:
+//   * A bar where A, B and C all fire drew three stacked chips here and a
+//     single "Z3" on the companion pane. It read as the two scripts
+//     disagreeing. They agree exactly — only the DRAWING differed. The overlay
+//     now collapses to the deepest tier, like the pane and like the alert
+//     message. "Stack every stretch tier that fires on one bar" puts the
+//     ladder back if you want it.
+//   * v6.42 introduced that ladder to fix a parity break that did not exist —
+//     it asserted the pane draws every tier without ever checking. It does
+//     not. Premise verified against a live chart this time.
+//   * Fewer labels against the 500 cap on a busy day, as a side effect.
+//
+//  v6.44 changes — THE LAST TWO HOLES IN THE ALERT GATE:
+//   * US MARKET HOLIDAYS AND HALF-DAYS. The gate was a clock and a weekday
+//     test, so Thanksgiving 11:00 ET sailed straight through it. It now knows
+//     the NYSE calendar — computed from the rules, not stored as a list, so
+//     there is no data request, no plan dependency, no repaint risk and
+//     nothing to maintain. Good Friday comes out of the Gregorian computus.
+//     Half-days close the window at 13:00 ET instead of 16:00. Verified
+//     date-for-date against the real NYSE session calendar for 2022-2027.
+//     Ad-hoc closures (2018-12-05, 2025-01-09) go in a text input.
+//   * THE DAILY-CHART BYPASS. Daily-or-higher charts used to skip the gate
+//     completely, because a daily bar is timestamped at its SESSION OPEN and
+//     a bar-clock test would have silenced TD Sequential and the 200 Line
+//     forever. They now test the WALL clock (timenow) plus a grace tail,
+//     default 30 minutes — which is the right question on a daily chart,
+//     since the alert can only fire at the moment the bar closes. A US daily
+//     close at 16:00 ET passes; a broker CFD rolling its day at 17:00 or at
+//     midnight does not.
+//   * Still ZERO new plots and ZERO new request.security calls. 34/40.
+//
+//  v6.43 changes — MAKE THE NIGHT ALERT NAME ITSELF:
+//   * Every alert() message now carries a stamp: " [v6.43 HH:MM ET]".
+//     Two open questions die at once. (a) A TradingView alert is a FROZEN
+//     SNAPSHOT of the script and its inputs taken when the alert was created;
+//     editing and saving the source does NOT reach it. So a night alert that
+//     arrives with NO stamp was created before this build and is running
+//     pre-gate code -- delete it and create it again. (b) A phone notification
+//     is timestamped in the PHONE's timezone, not New York's; the stamp puts
+//     the exact New York minute the gate tested inside the message body, so
+//     there is nothing left to convert or guess.
+//   * New GATE row in the 0DTE context box: version, the live New York clock
+//     as the script reads it, and SENDING / HOLDING. If the chart's row says
+//     v6.43 and an incoming notification does not, they are two different
+//     copies of this script and the alert is the stale one.
+//   * No new plots, no new request.security calls, no logic change to the gate
+//     itself. v6.42's arithmetic is untouched.
+//
+//  STILL NOT COVERED by the market-hours gate, after v6.44:
+//   - Ad-hoc, unscheduled closures. No rule can predict a funeral or a
+//     hurricane. Type the date into "Extra market closures" when it happens.
+//   - Non-US sessions. The gate is the New York clock and the NYSE calendar
+//     by design. A daily chart of a European or Asian symbol closes inside or
+//     outside that window on its own schedule, not on this one.
+//   - The marks. The one-shot machines still run and latch overnight when
+//     "Let marks and alerts fire outside 09:30-16:00" is on; only the SEND is
+//     suppressed, and it is dropped rather than deferred.
+//
+//  EARLIER HISTORY (condensed — the full notes live in the project doc):
+//   v6.42 parity/ladder · v6.41 the stale RSI confirm gate · v6.40 the market-
+//   hours alert gate · v6.39 TD Sequential · v6.38 amplifier filter and tier
+//   floor · v6.37 the state-shift bug · v6.36 the rounding leak · v6.35 the
+//   24h merge · v6.34 expected move + the 1500-bar cloud · v6.33 max_bars_back
+//   · v6.32 TVC:VIX · v6.28-6.31 the exact isoline solve and the score cloud ·
+//   v6.22 the 0DTE alert master removed in favour of MUTE.
+//
+//  THE TWO RULES THAT HAVE COST THE MOST TIME:
+//   1. THE SAVED-INPUT RULE. TradingView keeps every input a chart has already
+//      saved. A changed DEFAULT can never reach an existing chart. A NEW INPUT
+//      TITLE is a new key, and a new key does take its default.
+//   2. THE ALERT-SNAPSHOT RULE. Creating an alert freezes a copy of the script
+//      AND its inputs. Editing the source never reaches a running alert — it
+//      has to be deleted and recreated. That is what alertStamp is for.
+//
+//  READOUT LAYOUT — six tables, one per screen corner (TradingView allows only
+//  one table per position, so two in the same corner overlap):
+//    Top Left      VALUATION & RATES — P/E / fwd P/E / PEG / US 10Y / TD SEQ
+//    Top Center    PULSE — momentum / stretch / used / expected move
+//    Top Right     200 LINE / VOL DIAL / RSI
+//    Bottom Left   RSI, only when it is not riding along top-right
+//    Bottom Center 0DTE CONTEXT — score / window / LTF / flag / alerts (1-min)
+//    Bottom Right  0DTE grid                                    (1-min only)
+//  TradingView draws its LOGO over bottom left and the CHART LEGEND over top
+//  left; those two corners are never quite clean. "HIDE ALL READOUT BOXES" in
+//  General Settings clears the lot in one click.
+//
+//  PLOT BUDGET — the binding constraint. TradingView caps a script at 64 plot
+//  counts and does NOT fail compilation when you exceed it: it adds the
+//  indicator, draws nothing, and raises RE10140 with the exact count. Hover the
+//  warning triangle in the chart legend to read it.
+//  Weighting: plot()=1 (2 with a series colour), plotcandle()=4, plotshape and
+//  plotchar=1, fill()=1 (2 with a series colour), bgcolor=1, alertcondition()=1.
+//  Tables, labels, lines and alert() cost NOTHING — which is why the fib levels,
+//  the Saty levels, the expected-move band, the TD levels and every readout are
+//  drawn that way.
+//  MEASURED, not estimated — these are RE10140's own numbers:
+//      v6.49  64 / 64   exactly on the cap, which is why v6.59 broke
+//      v6.59  66 / 64   RE10140
+//      v6.59  61 / 64   after removing the WMA and 2nd-TF SMA blocks
+//  request.security 27 + request.financial 1 = 28 of 40.
+//  If you add a plot and the chart goes blank, hover the legend's warning
+//  triangle: RE10140 prints the exact count. Trust that number and nothing
+//  else.
+// ============================================================================
+// ─── GENERAL SETTINGS (shared) ───────────────────────────────────────────────
+groupGlobal  = "General Settings"
+src          = input.source(hl2, "Source (clouds)", group=groupGlobal)
+globalOffset = input.int(0, "Global Offset (clouds)", group=groupGlobal)
+showAll      = input.bool(false, "Show All Clouds & Lines", tooltip="Quick toggle to see everything", group=groupGlobal)
+enableAlerts = input.bool(false, "Enable Alerts (C1 Cloud Cross)", group=groupGlobal)
+// v6.40 — THE MARKET-HOURS ALERT GATE. One switch over every alert() in the
+// deck, ON by default. A NEW input name, so it takes its default even on a
+// chart that has already saved every other setting — the v6.22 lesson applied
+// on purpose rather than learned a fourth time.
+alertsRthOnly = input.bool(true, "Alerts ONLY during market hours (09:30-16:00 ET)", group=groupGlobal, tooltip="ON (default): nothing is sent outside the New York regular session, on any block — cross, cloud, RSI, ADR, Saty, 200 Line, vol dial, TD and every 0DTE alert. Weekends are excluded too, which matters on crypto and on anything else printing bars at 11am on a Sunday.\n\nWHY IT EXISTS. Time gating used to be scattered: the ADR and Saty alerts rode on 'Regular session only' in the Action group, the 11-event layer had its own switch, and the cross, cloud, RSI, 200 Line and vol-dial alerts had NO time gate at all. On a 24h chart the 0DTE marks switch (which defaults ON) opened the zone and exhaustion machines to the full 24 hours, alerts included — that is what was waking you at 3am.\n\nWHAT IT DOES NOT DO: it does not stop the machines running. An exhaustion tier that fires overnight still latches its one-shot and still draws its 1/2/3 mark; the alert is SWALLOWED, not queued, and will not re-fire at the open. That is the honest behaviour for a one-shot, and it is why the mark is still drawn — the chart keeps the record even though your phone stayed quiet. Untick 'Let marks and alerts fire outside 09:30-16:00' in the 0DTE Context group as well if you want the machines themselves held to the session.\n\nDAILY-OR-HIGHER CHARTS (changed in v6.44). This used to be a blanket bypass, because a daily bar's timestamp is the session OPEN — 00:00 on many symbols — so testing the bar clock would have silenced TD Sequential and the 200 Line entirely. It now tests the WALL clock instead (timenow), which is the moment the bar actually closed and the alert actually fired, plus the grace window set below. A US daily bar closing at 16:00 ET still gets through; a broker CFD whose 'daily' rolls at 17:00 or at midnight no longer does.\n\nUS market HOLIDAYS and HALF-DAYS are handled from v6.44 — see the next two settings.")
+// v6.44 — THE NYSE CALENDAR. Both new input names, so both take their defaults
+// on a chart that has already saved everything else.
+alertHolOn   = input.bool(true, "Also skip US market holidays and half-days", group=groupGlobal, tooltip="ON (default): the market-hours gate additionally knows the NYSE calendar. Nothing is sent on a market holiday, and on a half-day the window closes at 13:00 ET instead of 16:00.\n\nHOW IT KNOWS, with no data feed and nothing to maintain. Every NYSE holiday is a rule, so the script computes them rather than storing them: New Year's Day (Jan 1, moved to Monday if it lands on Sunday, NOT observed if it lands on Saturday), MLK and Presidents' Day (third Monday of January and February), Good Friday (Easter by the Gregorian computus, minus two days), Memorial Day (last Monday of May), Juneteenth, Independence Day and Christmas (moved to the nearest weekday), Labor Day (first Monday of September) and Thanksgiving (fourth Thursday of November). Half-days at 13:00 ET: July 3 when both July 3 and July 4 are weekdays, the Friday after Thanksgiving, and December 24 when both December 24 and 25 are weekdays.\n\nThis was checked date-for-date against the real NYSE session calendar for 2022 through 2027 and matches exactly. The only thing rules cannot predict is an AD-HOC closure — a national day of mourning, a hurricane. There were two in the last decade: 5 Dec 2018 and 9 Jan 2025. Put those in the box below when they happen.")
+alertHolAdd  = input.string("", "Extra market closures (YYYY-MM-DD, comma separated)", group=groupGlobal, tooltip="For unscheduled full-day closures the rules above cannot know about — a presidential funeral, a weather closure. Example: 2025-01-09, 2018-12-05\n\nDates are read in New York time and treated as fully closed. Spaces are ignored. Leave blank if you do not need it.")
+alertDailyTail = input.int(30, "Grace minutes after the close for daily-chart alerts", minval=0, maxval=480, step=15, group=groupGlobal, tooltip="Only applies on a DAILY-or-higher chart, where an alert can only fire when the bar closes. A US daily bar closes at 16:00 ET and TradingView dispatches a moment later, so a hard 16:00 cutoff would swallow every TD Sequential and 200 Line alert. This is the tail that lets the close-of-day fire through.\n\n30 minutes is enough for a US equity or index daily close. Raise it if you run daily alerts on a broker CFD that rolls its day later than the New York close and you actually want those. Set it to 0 to be strict.")
+// ONE SWITCH FOR EVERY READOUT BOX. A new input name, so it takes its default
+// even on a chart that has already saved every other setting.
+uiHideBoxes  = input.bool(false, "HIDE ALL READOUT BOXES", group=groupGlobal, tooltip="Clears all six tables off the chart in one click — pulse, RSI, 200 Line / vol dial, valuation, 0DTE context and the 0DTE grid — without touching any of their individual settings. Lines, clouds, levels, markers and alerts all keep working. Untick and every box returns exactly as it was.")
+showRipster  = input.bool(true, "Ripster Clouds & MTFs (master)", group=groupGlobal)
+showLocal    = input.bool(true, "Show Local EMA Clouds", group=groupGlobal)
+showMTF      = input.bool(true, "Show MTF Clouds",        group=groupGlobal)
+showSMA      = input.bool(true, "Show Daily SMA Lines",   group=groupGlobal)
+// ─── LOCAL EMA CLOUDS ────────────────────────────────────────────────────────
+groupLocal     = "Local EMA Clouds"
+useEMA         = input.string("EMA", "MA Type", options=["EMA", "SMA"], group=groupLocal) == "EMA"
+showLocalLines = input.bool(false, "Display Local Lines", group=groupLocal)
+cloudFade      = input.int(70, "Cloud transparency (higher = lighter)", minval=0, maxval=100, group=groupLocal)
+leadLocal      = input.int(0, "Leading Period (Local)", minval=0, group=groupLocal)
+c1OnBase = input.bool(true,  "Cloud 1 (8-9)",     group=groupLocal, inline="c1")
+c3OnBase = input.bool(true,  "Cloud 3 (34-50)",   group=groupLocal, inline="c3")
+c1On = c1OnBase or showAll
+c3On = c3OnBase or showAll
+c1S = input.int(8,   "Short", group=groupLocal, inline="l1")
+c1L = input.int(9,   "Long",  group=groupLocal, inline="l1")
+c3S = input.int(34,  "Short", group=groupLocal, inline="l3")
+c3L = input.int(50,  "Long",  group=groupLocal, inline="l3")
+// ─── MTF CLOUDS ──────────────────────────────────────────────────────────────
+groupMTF         = "MTF Clouds (Higher Timeframe)"
+mtfRes           = input.timeframe("D", "Higher Timeframe Resolution", group=groupMTF)
+leadMTF          = input.int(0, "Leading Period (MTF)", minval=0, group=groupMTF)
+showMTFLinesBase = input.bool(false, "Display MTF Lines", group=groupMTF)
+m1OnBase = input.bool(false, "MTF Cloud 1 (50-55)", group=groupMTF, inline="m1")
+m2OnBase = input.bool(false, "MTF Cloud 2 (20-21)", group=groupMTF, inline="m2")
+m3OnBase = input.bool(false, "MTF Cloud 3 (34-50)", group=groupMTF, inline="m3")
+m1On = m1OnBase or showAll
+m2On = m2OnBase or showAll
+m3On = m3OnBase or showAll
+showMTFLines = showMTFLinesBase or showAll
+m1S = input.int(50, "Short", group=groupMTF, inline="m1l")
+m1L = input.int(55, "Long",  group=groupMTF, inline="m1l")
+m2S = input.int(20, "Short", group=groupMTF, inline="m2l")
+m2L = input.int(21, "Long",  group=groupMTF, inline="m2l")
+m3S = input.int(34, "Short", group=groupMTF, inline="m3l")
+m3L = input.int(50, "Long",  group=groupMTF, inline="m3l")
+// ─── DAILY SMA LINES ─────────────────────────────────────────────────────────
+groupSMA  = "Daily SMA Lines"
+smaTF     = input.timeframe("D", "Daily MA Timeframe", group=groupSMA)
+smaWidth  = input.int(2, "MA Line Width", minval=1, group=groupSMA)
+// v6.59 — SMA 10 and SMA 150 added. Both new input names, so both take their
+// defaults on a chart that has already saved every other setting.
+sma10On   = input.bool(true, "SMA 10",  group=groupSMA, inline="s10")
+sma10Col  = input.color(#00BCD4, "", group=groupSMA, inline="s10")
+sma20On   = input.bool(false, "SMA 20",  group=groupSMA, inline="s20")
+sma20Col  = input.color(color.yellow, "", group=groupSMA, inline="s20")
+sma50On   = input.bool(true, "SMA 50",  group=groupSMA, inline="s50")
+sma50Col  = input.color(color.green,  "", group=groupSMA, inline="s50")
+sma100On  = input.bool(false, "SMA 100", group=groupSMA, inline="s100")
+sma100Col = input.color(color.blue,   "", group=groupSMA, inline="s100")
+sma150On  = input.bool(true, "SMA 150", group=groupSMA, inline="s150")
+sma150Col = input.color(#9C27B0, "", group=groupSMA, inline="s150")
+sma200On  = input.bool(true, "SMA 200", group=groupSMA, inline="s200")
+sma200Col = input.color(color.red,    "", group=groupSMA, inline="s200")
+// ─── CHART-TIMEFRAME EMA (v6.59) ─────────────────────────────────────────────
+// Deliberately NOT part of the daily set above and deliberately NOT a
+// request.security. Every other moving average in this deck is anchored to a
+// fixed timeframe — D, W, M — so it means the same thing whatever the chart is
+// showing. This one is the opposite: ta.ema(close, 21) on the CHART's own bars,
+// so on a 1-hour chart it is a 21-hour EMA and on a 5-minute chart it is a
+// 105-minute one. That is the point of it, and it is why it gets its own group
+// rather than sitting in "Daily SMA Lines" where it would read as a daily 21.
+// Costs ZERO data requests (it is computed locally) and ONE plot slot: 61 -> 62
+// of 64. The right-edge tag prints the timeframe it is actually on, so it reads
+// "21 EMA (1h)" here and "21 EMA (5m)" if you drop down, rather than lying.
+groupE21  = "Chart-Timeframe EMA"
+ema21On   = input.bool(true, "Show the chart-timeframe EMA", group=groupE21, tooltip="ON by default. Computed from the bars the chart is currently showing — no timeframe multiplier, no data request. Switch the chart to 4h and it becomes a 21 x 4h EMA; that is intended, and the tag at the right edge always names the timeframe it is using.")
+ema21Len  = input.int(21, "Length", minval=1, group=groupE21, inline="e21")
+ema21Col  = input.color(#D500F9, "", group=groupE21, inline="e21", tooltip="Electric violet by default, chosen to be clear of everything already on the chart: SMA 10 is cyan, 20 yellow, 50 green, 100 blue, 150 the darker purple #9C27B0, 200 red, the secular 200W/300W lines amber, and 200M brown. If you recolour it, avoid those.")
+ema21Wid  = input.int(2, "Width", minval=1, maxval=4, group=groupE21, inline="e21")
+// ─── REMOVED IN v6.59 — DAILY WMA LINES and MTF SMA LINES (2nd TF) ───────────
+// Five plot slots, both blocks shipping OFF, both redundant with the daily SMA
+// set they sat next to. They were the price of SMA 10 and SMA 150 plus three
+// slots of headroom. See the PLOT BUDGET note in the header for the arithmetic;
+// if you want either back, say which of the current plots to trade for it.
+// ─── 200-WEEK MA (secular trend line) ────────────────────────────────────────
+group200w = "200-Week MA (secular)"
+show200w  = input.bool(true, "Show 200-week MA", group=group200w)
+len200w   = input.int(200, "Length (weeks)", minval=1, group=group200w)
+type200w  = input.string("SMA", "MA type", options=["SMA","WMA","EMA"], group=group200w)
+col200w   = input.color(#FFD54F, "Color", group=group200w, inline="w2w")
+wid200w   = input.int(2, "Width", minval=1, group=group200w, inline="w2w")
+// ─── 300-WEEK MA (deeper secular floor) ──────────────────────────────────────
+group300w = "300-Week MA (secular)"
+show300w  = input.bool(true, "Show 300-week MA", group=group300w)
+len300w   = input.int(300, "Length (weeks)", minval=1, group=group300w)
+type300w  = input.string("SMA", "MA type", options=["SMA","WMA","EMA"], group=group300w)
+col300w   = input.color(#FFA000, "Color", group=group300w, inline="w3w")
+wid300w   = input.int(2, "Width", minval=1, group=group300w, inline="w3w")
+// ─── 200-MONTH MA (generational floor) ───────────────────────────────────────
+group200m = "200-Month MA (generational)"
+show200m  = input.bool(true, "Show 200-month MA", group=group200m)
+len200m   = input.int(200, "Length (months)", minval=1, group=group200m)
+type200m  = input.string("SMA", "MA type", options=["SMA","WMA","EMA"], group=group200m)
+col200m   = input.color(#8D6E63, "Color", group=group200m, inline="w2m")
+wid200m   = input.int(2, "Width", minval=1, group=group200m, inline="w2m")
+// ─── DEATH / GOLDEN CROSS (daily SMA 50 × 200) ───────────────────────────────
+groupCross   = "Death / Golden Cross"
+showCross    = input.bool(false, "Show 50/200 cross markers", group=groupCross)
+crossAlertOn = input.bool(false, "Alert on 50/200 cross", group=groupCross)
+// ─── AUTO FIB LEVELS (0.618 / 1.618, swing-anchored, MTF) ────────────────────
+groupFib    = "Auto Fib Levels"
+// v6.59 — RENAMED, and that is the entire fix. The default was already false;
+// a chart that once had fib ON kept it ON through every source update, because
+// TradingView persists every input a chart has saved and a changed DEFAULT can
+// never reach it. A new title is a new key, and a new key does take its default.
+fibOn       = input.bool(false, "Draw auto fib levels", group=groupFib, tooltip="OFF by default. Renamed in v6.59 so that default actually lands on an existing chart — see the saved-input rule in the header. Tick it if you want the 0.618 / 1.618 levels back.")
+fibTF       = input.timeframe("W", "Anchor timeframe", group=groupFib)
+fibLen      = input.int(156, "Swing lookback (anchor-TF bars)", minval=10, maxval=400, group=groupFib, tooltip="156 weekly bars is about 3 years. The window's high and low become the anchors; levels re-anchor if a new extreme prints. For 0DTE context try anchor TF = D with a 20-30 bar lookback.")
+fibShow618  = input.bool(true, "0.618 retracement", group=groupFib, inline="f1")
+fibCol618   = input.color(#26A69A, "", group=groupFib, inline="f1")
+fibShow1618 = input.bool(true, "1.618 extension", group=groupFib, inline="f2")
+fibCol1618  = input.color(#AB47BC, "", group=groupFib, inline="f2")
+fibShow50   = input.bool(false, "0.5 midpoint", group=groupFib, inline="f3")
+fibCol50    = input.color(#90A4AE, "", group=groupFib, inline="f3")
+// ─── NET DOLLAR VOLUME (v6.59) ───────────────────────────────────────────────
+// Volume x price, signed by whether the bar closed up or down — the histogram
+// people post as "ETF flows". It is NOT fund flow: creations and redemptions
+// are issuer data TradingView does not carry, and secondary-market turnover can
+// be enormous with zero net flow. This is a turnover proxy. Read it that way.
+//
+// THE PROBLEM IT HAS TO SOLVE: this deck is overlay=true, so there is ONE price
+// scale and a series in billions of dollars cannot share it. The fix is to
+// RESCALE the series into a band of price space underneath the candles — the
+// same thing a volume-profile script does. Costs ZERO plot slots because the
+// bars are line.new drawings, which is the trick the Saty levels, the fib
+// levels and the TD levels already use.
+//
+// WHAT IT COSTS YOU INSTEAD: vertical room. The band sits below the lowest low
+// of the scale window, so the price axis stretches down to include it and the
+// candles compress by roughly the band height plus the gap. Band 12% + gap 3%
+// means about 15% less room for price. Tune both below, or untick the block.
+groupNV   = "Volume Histogram (band under price)"
+nvOn      = input.bool(true, "Show the volume histogram band", group=groupNV, tooltip="ON by default as of v6.59. It costs vertical room on the price scale and most of the time you will not want it. Zero plot slots and zero data requests, so it is free to leave in the file.\n\nNo volume on the chart symbol (SPX, most index tickers, some CFDs) means nothing draws and the readout says so. Chart SOXX, QQQ, SPY, SOXL or any real equity.")
+nvDirBy   = input.string("Close vs its own open", "Call the bar up or down by", options=["Close vs its own open","Close vs previous close"], group=groupNV, tooltip="Which way a bar counts. 'Close vs previous close' matches TradingView's built-in Net Volume and is the usual up-day / down-day convention. 'Close vs its own open' asks whether the session itself finished green, which on a gappy symbol is a different question.")
+nvBars    = input.int(300, "How many bars to draw", minval=20, maxval=450, group=groupNV, tooltip="The histogram is drawn with line.new, and TradingView keeps at most 500 lines in a script. This deck already holds about 23 of them for the Saty, fib, expected-move and TD levels, so 450 is the ceiling that cannot evict them. 300 is about 14 months on a daily chart.")
+nvScaleLk = input.int(250, "Scale + anchor window (bars)", minval=20, maxval=1000, group=groupNV, tooltip="Two jobs. It sets the tallest bar — the biggest volume bar in this window becomes full band height, so everything is relative to it. And it sets where the band sits: under the lowest low of the same window.\n\nKeep it at or above 'How many bars to draw', or the earliest bars will be scaled against a window that does not contain them.")
+nvBandPct = input.float(12.0, "Band height (% of the window's price range)", minval=2.0, maxval=50.0, step=1.0, group=groupNV)
+nvGapPct  = input.float(3.0, "Gap below the low (% of the window's price range)", minval=0.0, maxval=30.0, step=0.5, group=groupNV)
+nvWidth   = input.int(4, "Bar thickness (pixels)", minval=1, maxval=8, group=groupNV, tooltip="Each bar is a vertical line, so its thickness is in pixels rather than bars. On a dense chart 1 or 2 reads best; zoomed in, 3 or 4.")
+nvRestCol = input.color(#B0BEC5, "Resting — at or below the MA", group=groupNV, tooltip="Light grey. This is the 'nothing to see here' state and it is meant to recede into the chart. Every bar that is not strictly above the volume MA gets it, including the warm-up bars before the MA has its full sample — a half-formed average is not worth lighting up for.")
+nvUpCol   = input.color(#00E676, "Above MA — closed UP", group=groupNV, inline="nvc")
+nvDnCol   = input.color(#FF1744, "Above MA — closed DOWN", group=groupNV, inline="nvc")
+nvFlatCol = input.color(#78909C, "Above MA — closed FLAT", group=groupNV, tooltip="Above the MA but closed exactly where it opened. Rare on 1h, not impossible. It gets its own slate colour rather than being quietly counted as buying, because calling a doji 'up' would be the script lying to you.")
+nvZeroCol = input.color(#78909C, "Baseline", group=groupNV, inline="nvc")
+nvMAOn    = input.bool(true, "Draw the volume MA line across the band", group=groupNV)
+nvMALen   = input.int(20, "Volume MA length", minval=1, group=groupNV, tooltip="20 bars of the CHART's resolution — no timeframe multiplier, no data request. On a 1-hour chart that is the average hour out of the last 20 hours, roughly three sessions. This is a VOLUME average, not a price average: nothing here touches the price scale.")
+nvMAType  = input.string("SMA", "Volume MA type", options=["SMA","EMA"], group=groupNV, tooltip="SMA is what 'above average volume' is conventionally defined against. EMA reacts faster to a volume regime change, which means FEWER bars light up during a sustained busy stretch, because the reference line climbs to meet them.")
+nvMACol   = input.color(#FFD54F, "Volume MA colour", group=groupNV, inline="nvma")
+nvMAWid   = input.int(2, "Volume MA width", minval=1, maxval=4, group=groupNV, inline="nvma")
+// ─── LABELS / TAGS ───────────────────────────────────────────────────────────
+groupLabels = "Labels / Tags"
+showLabels  = input.bool(true, "Show line tags", group=groupLabels)
+labelOffset = input.int(3, "Tag offset (bars to the right)", minval=0, maxval=50, group=groupLabels)
+// ─── RSI (dashboard readout) ─────────────────────────────────────────────────
+groupRSI  = "RSI (readout)"
+showRSI   = input.bool(false, "Show RSI readout", group=groupRSI)
+rsiMerge  = input.bool(false, "Ride along in the top-right box", group=groupRSI, tooltip="ON (default): the RSI becomes a third row inside the 200 LINE / VOL DIAL box in the top-right corner, so it is out of the bottom-left corner where TradingView parks its own logo. OFF: it gets its own table at the position below.")
+rsiPos    = input.string("Bottom Left", "RSI readout position (only when NOT riding along)", options=["Top Right","Top Center","Top Left","Bottom Right","Bottom Center","Bottom Left"], group=groupRSI, tooltip="Ignored while 'Ride along in the top-right box' is ticked. TradingView draws its logo over BOTTOM LEFT and the chart legend over TOP LEFT, so a standalone readout is happiest in a centre or right position.")
+rsiLen    = input.int(14, "RSI length", minval=1, group=groupRSI)
+rsiSrc    = input.source(close, "RSI source", group=groupRSI)
+rsiFollow = input.bool(true, "Follow the chart timeframe", group=groupRSI, tooltip="ON (default): the RSI recomputes on whatever timeframe the chart is showing. OFF: lock it to the fixed timeframe below. Either way the readout label prints the timeframe it is actually using.")
+rsiTF     = input.timeframe("D", "Locked timeframe (used when Follow is OFF)", group=groupRSI, tooltip="Only read when 'Follow the chart timeframe' is unticked. A locked higher timeframe reads the developing bar, so it keeps updating until that bar closes.")
+rsiOB     = input.float(70, "Overbought level", step=1, group=groupRSI)
+rsiOS     = input.float(30, "Oversold level", step=1, group=groupRSI)
+rsiAlertOn = input.bool(false, "Alert on overbought / oversold crossings", group=groupRSI, tooltip="Uses alert() — zero plot cost. Route through ONE alert on this indicator: condition 'Any alert() function call', trigger 'Once Per Bar Close'. Also subject to the market-hours gate in General Settings.")
+// ─── ADR PULSE (Average Daily Range + retracement from the weekly high) ──────
+groupADR   = "ADR Pulse"
+adrLen     = input.int(20, "ADR lookback (completed days)", minval=2, maxval=250, group=groupADR)
+adrBasis   = input.string("Percent", "ADR basis", options=["Percent","Points"], group=groupADR, tooltip="Percent (default, matches the scanners): ADR% = 100 x (SMA(high/low, N) - 1), converted to points at the current price. Points: the raw average of (high - low) in dollars.")
+adrAnchor  = input.string("Rolling days", "Measure the fall from", options=["Rolling days","This week's high"], group=groupADR, tooltip="Rolling days (default): the highest high of the last N sessions. This week's high matches the scanner convention but RESETS EVERY MONDAY — on 2026-06-09 the weekly anchor read 0.27 normal days at the open while the rolling one read 2.63. The reset is a blind spot, not a feature.")
+adrRollLk  = input.int(10, "Rolling lookback (days)", minval=2, maxval=60, group=groupADR, tooltip="10 sessions is about two weeks, so the reading always spans a weekend and can never be blanked by the Monday reset.")
+adrHot     = input.float(1.5, "Interesting level (x ADR)", minval=0.1, step=0.1, group=groupADR, tooltip="Rows go magenta once the retracement from the weekly high exceeds this many ADRs.")
+adrAlertOn = input.bool(false, "Alert when the retracement crosses the level", group=groupADR, tooltip="Uses alert() — zero plot cost.")
+// ─── PULSE READOUT (one box: ADR stretch + ATR zone) ─────────────────────────
+groupPulse    = "Pulse Readout"
+pulseOn       = input.bool(true, "Show the pulse readout", group=groupPulse)
+pulsePos      = input.string("Top Center", "Position", options=["Top Right","Top Center","Top Left","Bottom Right","Bottom Center","Bottom Left"], group=groupPulse, tooltip="Top Center by default: TradingView draws the chart legend over the top-left corner, and each readout needs its own corner — two tables in one corner overlap.")
+pulsePlain    = input.bool(true, "Plain-English wording", group=groupPulse, tooltip="ON (default): the box says what it means — GOING NOWHERE / FELL 1.6 normal days / MOVED 78% of a day. OFF: the trader shorthand. Same numbers either way.")
+pulseBig      = input.bool(false, "Larger text", group=groupPulse)
+pulseShowWk   = input.bool(false, "+ week's high row", group=groupPulse, inline="px1")
+pulseShowLow  = input.bool(false, "+ up from week's low row", group=groupPulse, inline="px1")
+pulseShowRaw  = input.bool(false, "+ what a normal day is worth (ADR / ATR)", group=groupPulse)
+pulseHdr      = input.bool(false, "+ ticker / action header row", group=groupPulse, tooltip="OFF (v6.59): the box is just FELL and MOVED. Tick it to put the ticker and the MOMENTUM UP / DOWN / NO MOMENTUM header back on top. New input title in v6.59 so the OFF default actually reaches a chart that already saved the old layout — saved-input rule, see the header.")
+// ─── 0DTE CONTEXT — the pane's chart-side layers, folded in ──────────────────
+group0dteX = "0DTE Context (1-minute only)"
+zdCtxOn    = input.bool(true, "Show the context readout", group=group0dteX)
+zdCtxPos   = input.string("Bottom Center", "Readout position", options=["Top Right","Top Center","Top Left","Bottom Right","Bottom Center","Bottom Left"], group=group0dteX)
+zdExhOn    = input.bool(true, "Exhaustion markers 1 / 2 / 3", group=group0dteX, tooltip="The half of the tiering that says something is ENDING. A zone entry is the odometer — the stretch just began. Exhaustion fires when the stretch stops making progress: a pullback of the configured delta with the average RSI confirming, or stalling in-zone for the hold-bars count with no new extreme.")
+zdMarkSize = input.string("Normal", "Marker size", options=["Tiny","Small","Normal","Large"], group=group0dteX, tooltip="The tier digit is drawn INSIDE the chip, so it has to be big enough to hold it — at Tiny the text has nowhere to go.")
+// v6.45 — HOW A MULTI-TIER BAR IS DRAWN. New input name, so it takes its
+// default on a chart that has already saved everything else.
+zdMarkLadder = input.bool(false, "Stack every stretch tier that fires on one bar", group=group0dteX, tooltip="OFF (default): when more than one tier fires on the same bar, ONE chip is drawn showing the DEEPEST tier reached. This is what the companion 0DTE Score pane does and what the alert message already said, so all three now agree.\n\nWHY TIERS FIRE TOGETHER. The tiers are one-shots that re-arm only when the score returns to the neutral band. If the score then runs from neutral straight through +7, +8 and +8.5 inside one or two bars, all three cross on the same bar and all three fire at once. That is the machine working, not a bug — and \"C\" already implies B and A were crossed on the way, so the extra chips carry no information.\n\nON: every tier that fires gets its own chip, laddered upward so they do not bury each other. Useful when you want to see that a bar was a three-tier jump rather than a tier-3-only STALL fire — the stall branch counts bars inside each zone separately and genuinely can fire one tier alone.")
+zdZoneCol  = input.color(#1565C0, "Zone colour", group=group0dteX, inline="zec")
+zdExhCol   = input.color(#C2185B, "Exhaustion colour", group=group0dteX, inline="zec")
+zdDivGap   = input.float(1.0, "Divergence score gap", step=0.5, minval=0.5, group=group0dteX, tooltip="The second amplifier. Price retests the session extreme (within 5 bp) but the score sits at least this far INSIDE its value at that extreme — a hollow push. Historically upgrades a top-side fire more than a climax does.")
+zdZoneOn   = input.bool(true, "Zone-entry markers A / B / C", group=group0dteX, tooltip="Marks the first bar the average score ENTERS each stretch zone — the odometer, not the exhaustion call. One-shot per episode, re-arms only when the score returns to the neutral band.")
+zdTh1      = input.float(7.0, "A / 1 (+/-)", step=0.5, minval=4.5, group=group0dteX, inline="zz")
+zdTh2      = input.float(8.0, "B / 2 (+/-)", step=0.5, minval=4.5, group=group0dteX, inline="zz")
+zdTh3      = input.float(8.5, "C / 3 (+/-)", step=0.5, minval=4.5, group=group0dteX, inline="zz")
+zdClimOn   = input.bool(true, "Volume-climax markers", group=group0dteX, tooltip="Volume z >= threshold against a 30-bar trailing window that resets each session and never spans the overnight. At a stretch-zone entry a climax roughly DOUBLES the historical hit rate, which is why it is also appended to the labels as +climax.")
+zdVolChart = input.bool(true, "Climax uses the chart symbol's own volume", group=group0dteX, tooltip="ON (default): measure the climax on whatever you are charting. OFF, or on a symbol with no volume: fall back to the reference symbol below.")
+zdSpyTkr   = input.symbol("AMEX:SPY", "…fallback volume symbol", group=group0dteX, tooltip="Used when the chart symbol carries no volume (SPX and most index tickers), or when the option above is off.")
+zdClimaxZ  = input.float(3.0, "Climax volume z >=", step=0.5, minval=1.0, group=group0dteX)
+zdLtfOn    = input.bool(true, "Longer-TF context row (4H / D / W / M)", group=group0dteX, tooltip="The same score formula on the slow bars — the trend backdrop behind the intraday dial. Context only: it feeds no machine and raises no alert.")
+zdFlagOn   = input.bool(true, "V-BOUNCE flag (-8.5 print on a calm open)", group=group0dteX, tooltip="A hard sell-off print with the volatility gate opening below the threshold marks the V-shaped-recovery day: price often rips back UP, putting the CALL side at multiples of its base breach rate for the rest of the session. Arms once and holds for the day. S&P-only finding.")
+zdVixTkr   = input.symbol("TVC:VIX", "Regime gate symbol (must be REAL-TIME)", group=group0dteX, tooltip="CBOE:VIX1D is the VALIDATED gate and this default is a compromise forced by data entitlements, not a change of mind. Verified 2026-07-27 on a paid TradingView plan: VIX1D charts fine but is DELAYED BY 15 MINUTES, and TradingView refuses to save an alert whose script touches a delayed symbol. TVC:VIX is real-time on standard plans and lets the alert save. COST: the flag arms about 3x less often on plain VIX — lift 2.77 [1.03,5.05] vs 3.99 [2.71,5.58] for VIX1D. What you do NOT lose: score_watcher.py pulls VIX1D from Tradier, so the validated V-BOUNCE still runs on the box and Telegram remains the authority on that flag. NOTE: this same request also feeds the EXPECTED MOVE block, so whatever you put here is the implied vol that block uses.")
+zdVixTh    = input.float(15.0, "Low-VIX threshold (day open <)", step=0.5, group=group0dteX)
+zdPxOn     = input.bool(true, "Score-to-price levels (for free price alerts)", group=group0dteX, tooltip="Draws the price at which the composite score would reach the plotted threshold on each side, as a line plus a label you can read a number off. Costs no extra request.security calls. v6.24 onward solves the real score by bisection rather than inverting RSI alone. Treat the number as a place to put an alert, not a mechanical trigger — it moves as the higher-timeframe legs re-anchor.")
+zdPxCol    = input.color(#00838F, "Level colour", group=group0dteX, inline="pxc")
+zdExhPxCol = input.color(#FF3D71, "Exhaustion level", group=group0dteX, inline="pxc", tooltip="Deliberately brighter than the threshold contours and thicker on the chart. It is INTERMITTENT by nature — it exists only while an episode is armed — so unlike a continuous level it has to announce itself or it gets missed inside the cloud.")
+zdPxFill   = input.bool(true, "…shade between them (the score cloud)", group=group0dteX, tooltip="Fills the band between the two contours. Worth more than decoration: the band IS the region where the score sits between the thresholds, so PRICE LEAVING THE CLOUD is the threshold event itself. The band's WIDTH is a second reading: narrow means the score is highly sensitive to price right now, wide means the tape has room. Costs 1 fill slot.")
+zdPxLine   = input.bool(true, "…draw them as continuous lines", group=group0dteX, tooltip="Plots the two levels as real series, so they run across the chart like a moving average instead of appearing only at the right edge. Costs 2 plot slots and is bounded by the history window below.")
+zdPxTh     = input.float(8.5, "…score level to plot (+/-)", minval=4.5, maxval=10.0, step=0.5, group=group0dteX, tooltip="Which score contour the two lines trace. KEEP THIS EQUAL TO THE C/3 THRESHOLD (8.5 by default) if you want the lines to correspond to the 1/2/3 marks — they are the same event. Raising it to 9.5 pushes the lines further from price, but nothing fires at 9.5, so the line would be tracking a level the rest of the deck has no opinion about.")
+zdExhPxOn  = input.bool(true, "…and the exhaustion-fire level", group=group0dteX, tooltip="THIS IS A MARKER LOCATION, NOT AN ENTRY. Three separate studies say so: the +/-8.5 reversal entry is dead unconditionally at decade scale (N=3,307, 30-minute mean +0.0 bps, REVERSAL_STUDY_REPORT.md); exhaustion is an extreme MARKER at about 2x time-matched no-skill, explicitly not an entry; and ATR stretch as a filter was worth about 2 SPX points, 26% of the typical post-fire move (ATR_STRETCH_REPORT.md). What this line does is show WHERE the 1/2/3 mark would print. Trading it as a reversal is the thing that has already been measured and rejected.")
+// v6.34 — RENAMED so the new default actually lands. The old title had 500
+// saved on every existing chart, and 500 one-minute bars is 8h20m: on a 24h
+// symbol that is a third of the session, which is why the cloud appeared to
+// start halfway across the screen. It was never a bug — it was this input,
+// working exactly as documented, sized for an RTH chart and then used on a CFD.
+zdPxBars   = input.int(1500, "…how far back to draw the cloud (bars)", minval=50, maxval=5000, step=50, group=group0dteX, tooltip="How far back the solver runs. It is a BISECTION, not a formula: each bar costs 4 call sites x 20 evaluations x 4 legs = 320 leg evaluations. 1500 bars is about 480,000 of those and is comfortable. 5000 is about 32M and you will feel the chart load. IF THE CLOUD STOPS PARTWAY ACROSS THE CHART, THIS IS THE NUMBER TO RAISE.")
+// ── v6.22: THE MASTER SWITCH IS GONE, DELIBERATELY ───────────────────────────
+// A source edit cannot override a saved input. What it CAN do is remove the
+// saved input from the path: alerts are now unconditional, and the only control
+// is a NEW input — new name, therefore new key, therefore no saved value,
+// therefore it genuinely does take its default.
+zdMute     = input.bool(false, "MUTE all 0DTE alerts", group=group0dteX, tooltip="Everything still draws on the chart; nothing is sent. The ALERTS row in the context readout turns red while this is on, so a muted chart can never look like a quiet market again.")
+zdAlertZ   = input.bool(true, "Alert · zone A/B/C", group=group0dteX, inline="zdal2", tooltip="Off by default: a zone entry is the odometer, not a call to act, and at the default thresholds it fires often enough to bury the exhaustion prints.")
+zdAlertE   = input.bool(false,  "Alert · exhaustion 1/2/3", group=group0dteX, inline="zdal2", tooltip="The prints that say a stretch is ENDING — the actionable half. On by default.")
+zdAlertV   = input.bool(true,  "Alert · V-BOUNCE", group=group0dteX, inline="zdal2")
+// v6.38 — per-chart tier floor. The three tiers are INDEPENDENT one-shot
+// machines: tier 1 arms at +/-7.0, tier 3 at +/-8.5, and they fire on their own
+// bars. So this is a real filter, not a relabelling.
+zdAlExhAmp = input.bool(false, "…and only when the fire carries an amplifier", group=group0dteX, tooltip="Requires +climax (volume z >= threshold) OR +divergence (price retests the session extreme while the score does not) on the same bar as the exhaustion fire. Off by default.\n\nWHY THIS AND NOT A STANDALONE CLIMAX ALERT: a climax on its own is not a signal in this project and never has been — v6.12 removed the standalone climax marks for exactly that reason, and the chart turned into confetti before it did. The validated form is the PAIRING: an amplifier ON a fire roughly DOUBLES the historical hit rate to about 50%, and divergence lifts a top-side fire from 1.58x to 2.13x time-matched no-skill.\n\nEXPECT IT TO BE RARE. It needs a fire and an amplifier on the SAME bar. Over your 12-session window exactly one of nine fires carried a +climax tag. Combined with a tier floor of 3 you may go weeks without an alert — check the ALERTS row rather than assuming the script broke.")
+zdAlExhMin = input.int(1, "…only alert on exhaustion tier N or deeper", minval=1, maxval=3, group=group0dteX, tooltip="1 (default) alerts on every exhaustion fire. 3 alerts only when the DEEPEST machine fires — the one that needs the score past +/-8.5. Set per chart, so a noisy symbol can be held to 3 while the S&P stays at 1.\n\nSIZE OF THE CUT, from your own observation window (12 sessions, 2026-07-13 to 07-28): 9 exhaustion fires, of which 8 were tier 1 and only 2 reached tier 3. Going to 3 takes you from about 0.9 fires per session to roughly 0.17 — one every six sessions. That is a large reduction and it is not obviously the right trade: the tier is a depth reading, and nothing in this project has established that deeper fires are BETTER, only rarer. Treat this as a noise control, not an edge.")
+// v6.35 — RENAMED and flipped ON. The zone and exhaustion machines are gated on
+// the New York clock INDEPENDENTLY of the score, so without this you get a live
+// overnight line and no marks under it. Both switches had to move together.
+// v6.40 — THIS NO LONGER CONTROLS ALERTS. It governs whether the MACHINES may
+// run outside the session; whether anything is SENT is the market-hours gate in
+// General Settings, which defaults to session-only. Leaving this ON with that
+// gate on is the sensible pairing: the chart keeps a full 24h record and your
+// phone stays quiet overnight.
+zdEthMarks = input.bool(true, "Let marks fire outside 09:30-16:00 (UNVALIDATED)", group=group0dteX, tooltip="Governs the MACHINES — zones, exhaustion, session extremes, the day reset and the flag. ON (default) lets them run around the clock so a 24h chart carries marks overnight.\n\nThis is NOT the alert switch. Since v6.40 whether anything is SENT is decided by 'Alerts ONLY during market hours' in General Settings, which defaults ON. So out of the box: overnight marks draw, overnight alerts do not go out.\n\nUntick this as well if you want the whole 0DTE half held to the regular session — no overnight marks, no overnight latching, nothing.\n\nEvery study behind these marks was measured on regular-session bars only, so read overnight prints as curiosity rather than signal.")
+// Aliases so the rest of the script is untouched by the rename.
+zdCtxAlerts = not zdMute
+zdAlZone    = zdAlertZ
+zdAlExh     = zdAlertE
+zdAlFlag    = zdAlertV
+groupAct  = "Action"
+actHeader = input.bool(true, "Pulse header shows the action", group=groupAct, tooltip="ON: the top row reads MOMENTUM UP / MOMENTUM DOWN / NO MOMENTUM / ABORT and tracks the break-and-fail state machine. OFF: it shows raw price location instead, which ignores failures entirely.")
+actLadder = input.bool(false, "Show the strike ladder while a setup is live", group=groupAct, tooltip="Adds one row listing the three opposite-side levels — nearest first, so most credit and least cushion on the left. The row only appears when a setup is actually live.")
+actMark   = input.bool(false, "Mark entries and exits on the chart", group=groupAct, tooltip="Drops a label on the bar where each break arms and where one fails, so the session can be reviewed afterwards. Labels cost no plot slots.")
+actMarkSize = input.string("Small", "Marker size", options=["Tiny","Small","Normal"], group=groupAct, inline="mk")
+actMarkGap  = input.float(2.0, "Stand-off (x bar ATR)", minval=0.0, step=0.5, group=groupAct, inline="mk", tooltip="How far every chart marker sits from its bar, measured in ATRs of the CHART's own timeframe so it means the same thing on a 1-minute chart as on a daily one.")
+actRthOnly = input.bool(true, "Regular session only", group=groupAct, tooltip="ON (default): no arming, no failing and no labels outside 09:30-16:00, and the levels FREEZE at their last regular-session values instead of drifting. Overnight volume is thin enough to poke through a trigger on almost nothing. This governs the STATE MACHINE; the market-hours gate in General Settings separately governs whether any alert is sent. Normally leave both on — the Saty levels are a day map anchored to the prior regular-session close, not a live reading.")
+actLateAt = input.float(100, "Call the setup LATE past this much of a day used (%)", minval=10, step=10, group=groupAct, tooltip="If a break arrives after the day has already travelled this much of its normal range, the action text is tagged LATE.")
+// ─── SATY ATR LEVELS (the 0DTE day map) ──────────────────────────────────────
+groupSaty   = "Saty ATR Levels"
+satyOn      = input.bool(true, "Show Saty ATR levels", group=groupSaty)
+satyTF      = input.timeframe("D", "Anchor timeframe", group=groupSaty, tooltip="D is the 0DTE setting: levels re-anchor every session on yesterday's close.")
+satyLen     = input.int(14, "ATR length", minval=1, group=groupSaty)
+satyRthData = input.bool(true, "Build the levels from regular-session bars", group=groupSaty, tooltip="ON (default): the pivot is the 16:00 close and the ATR is measured on regular-hours ranges, whatever session the chart is displaying. OFF: use the chart's own session — on an extended-hours chart that makes the pivot the ~20:00 close and folds the overnight range into the ATR. Also governs the ADR figures.")
+satyScope   = input.string("Current period only", "Draw levels", options=["Current period only","Across the chart"], group=groupSaty, tooltip="Current period only: the lines span today's session. Across the chart: extend today's levels edge to edge.")
+satyPad     = input.int(8, "Right padding (bars)", minval=0, maxval=100, group=groupSaty)
+satyLabels  = input.bool(false, "Show level labels", group=groupSaty)
+// v6.49 — the trigger and target rungs get their own switches. Until now only
+// mid and ext were optional, so "show me the day map without the ATR targets"
+// meant turning the whole block off. New input names, so both take their
+// defaults and the two older switches keep whatever you already had saved.
+satyShowTrig = input.bool(false, "0.236 triggers", group=groupSaty, inline="sl0", tooltip="Display only. The trigger levels still drive 'Alert when a trigger breaks' and the FAILS alert whether or not the lines are drawn — hiding them does not disarm anything.")
+satyShowTgt  = input.bool(false, "1 ATR targets", group=groupSaty, inline="sl0", tooltip="The two solid 'Target up / dn 1 ATR' lines. Display only, same as above.")
+satyShowMid = input.bool(false, "0.618 mid-range levels", group=groupSaty, inline="sl1")
+satyShowExt = input.bool(false, "1.618 / 2.618 / 4.236 extensions", group=groupSaty, inline="sl1")
+satyFailOn  = input.bool(false, "Alert when a break FAILS (the exit signal)", group=groupSaty, tooltip="Fires when price closes back through the trigger it broke earlier in the session. If you sell credit spreads with the momentum, this is the line that says the thesis is dead, and it exists before you enter rather than being improvised under pressure.")
+satyFailMin = input.float(0.25, "…but only after it ran this far past the trigger (x ATR)", minval=0.0, step=0.05, group=groupSaty, tooltip="Stops the alert firing on price merely wobbling either side of the trigger. Set 0 to fire on every reclaim.")
+satyAlertOn = input.bool(false, "Alert when a trigger breaks", group=groupSaty, tooltip="Fires the first time price closes through the upper or lower trigger. Uses alert().")
+satyColPiv  = input.color(#B0BEC5, "Pivot", group=groupSaty, inline="sc1")
+satyColTrig = input.color(#FDD835, "Trigger", group=groupSaty, inline="sc1")
+satyColMid  = input.color(#42A5F5, "Mid", group=groupSaty, inline="sc2")
+satyColTgt  = input.color(#26A69A, "Target", group=groupSaty, inline="sc2")
+satyColExt  = input.color(#AB47BC, "Extension", group=groupSaty, inline="sc2")
+// ─── EXPECTED MOVE (what the options market is charging for today) ───────────
+// ATR says what the tape HAS BEEN DOING. The expected move says what options
+// are CHARGING for. Selling premium is only worth doing when the second is
+// bigger than the first, and this is the only way to see that comparison
+// without an options chain — which Pine cannot reach at any subscription level.
+//
+//   1 sigma over N sessions  =  anchor x (IV / 100) x sqrt(N / 252)
+//
+// THE HONEST LIMIT: the volatility index describes the S&P and nothing else. On
+// TSLA or SOXL it is the wrong number entirely, so the row goes blank and asks
+// for that symbol's own IV rather than quietly printing a figure that does not
+// apply. There is no free 1-day IV index for single stocks.
+groupEM    = "Expected Move"
+emOn       = input.bool(true, "Show the expected move", group=groupEM, tooltip="Costs zero plot slots and zero extra data requests — the band is drawn with lines like the Saty levels, and the implied vol rides inside a request this deck was already making.")
+emRow      = input.bool(false, "· row in the pulse box", group=groupEM, inline="emr")
+emLines    = input.bool(true, "· band on the chart", group=groupEM, inline="emr")
+emAnchor   = input.string("Previous close (the pivot)", "Measure it from", options=["Previous close (the pivot)","Current price"], group=groupEM, tooltip="Previous close (default) puts the band on the SAME anchor as the Saty levels, so the expected move and the 1-ATR target are directly comparable — which is the entire point of carrying both. Current price answers a different question: how far can it still get from here.")
+emDays     = input.float(1.0, "Sessions to expiry", minval=0.05, maxval=60.0, step=0.5, group=groupEM, tooltip="1 = 0DTE. The move scales with the SQUARE ROOT of this, so four sessions is twice a one-session move, not four times.")
+emIvManual = input.float(0.0, "IV % override (0 = use the vol index)", minval=0.0, maxval=500.0, step=0.5, group=groupEM, tooltip="The volatility index describes the S&P. On any other symbol type its own implied vol here — front-month at-the-money IV from your broker, as a whole number (35 means 35%). Left at 0 on a non-S&P symbol the row says so instead of printing a number that does not apply.")
+emRichAt   = input.float(1.10, "Premium is RICH above (x a normal day)", minval=1.0, step=0.05, group=groupEM, tooltip="Colour the row green once the expected move exceeds this multiple of the daily ATR — options are charging more than the tape has been delivering, which is the condition a credit spread wants. Below the reciprocal it flags THIN: you are being underpaid for the risk you are taking.")
+emCol      = input.color(#7E57C2, "Band colour", group=groupEM)
+// ─── THE 200 LINE (trend regime: index vs its long MA) ───────────────────────
+group200  = "The 200 Line"
+tlAuto    = input.bool(true, "Auto signal from chart symbol", group=group200, tooltip="ON: measure the trend on the symbol you are charting, auto-mapping LONG leveraged ETFs to their index — TQQQ/QLD to QQQ, UPRO/SPXL/SPYU/SSO to SPY, TNA to IWM, SOXL to SOXX, UDOW to DIA. OFF: always use the manual Signal symbol below.")
+tlSym     = input.symbol("QQQ", "Signal symbol (manual / fallback)", group=group200, tooltip="Used only when Auto is OFF — the index whose trend drives IN/OUT.")
+tlTF      = input.timeframe("D", "Signal timeframe", group=group200, tooltip="Trend is always measured here regardless of chart timeframe. Daily is the tested setting.")
+tlLen     = input.int(200, "MA length", minval=2, group=group200)
+tlType    = input.string("SMA", "MA type", options=["SMA","EMA"], group=group200)
+tlBufAuto = input.bool(true, "Auto buffer by asset class", group=group200, tooltip="ON: pick the band automatically — crypto 5%, metals 1.5%, everything else 2%.")
+tlBuf     = input.float(2.0, "Buffer band (%) — manual", minval=0.0, step=0.1, group=group200, tooltip="Used when Auto buffer is OFF. Flip IN above MA*(1+buffer), OUT below MA*(1-buffer); hold inside the band.")
+tlSlopeOn = input.bool(true, "Require rising MA to flip IN (slope gate)", group=group200, tooltip="Only flip IN when the long MA itself is rising over the lookback. Exits are NOT gated — OUT fires regardless of slope.")
+tlSlopeLk = input.int(5, "Slope lookback (signal-TF bars)", minval=1, maxval=50, group=group200, tooltip="MA must be higher than it was this many bars ago, on the signal timeframe.")
+tlShowBg  = input.bool(false, "Shade regime (green IN / red OUT)", group=group200)
+tlShowSig = input.bool(true,  "Plot IN / OUT markers", group=group200)
+tlShowMA  = input.bool(true,  "Plot the 200 line (only when chart = signal symbol)", group=group200)
+tlAlertOn = input.bool(true,  "Alert on IN / OUT flips", group=group200, tooltip="Uses alert() — zero plot cost. This one ships ON, which is why it mattered that it had no time gate before v6.40: on a 24h chart a daily-state flip could fire at any hour. It is now subject to the market-hours gate in General Settings, and bypasses that gate on a daily-or-higher chart where the flip lands at the session close anyway.")
+// ─── VOL DIAL (C4 sizing: how much, while the 200 Line says IN) ──────────────
+vdShowSt  = input.bool(false, "Show the 200 LINE IN / OUT row", group=group200, tooltip="OFF (v6.59). Used to be welded to the vol dial below, so you could not have one without the other. The regime still drives the dial either way — when the 200 Line says OUT the dial reads 0% in, which tells you the same thing in the language you actually act on.")
+vdOn      = input.bool(false, "Show vol dial (C4 sizing)", group=group200, tooltip="60% divided by the 20d realized vol of the 3x leg. 88% means: while IN, hold 88% of the sleeve in the leveraged ETF, rest cash.")
+vdPos     = input.string("Top Right", "Vol dial position", options=["Top Right","Top Center","Top Left","Bottom Right","Bottom Center","Bottom Left"], group=group200)
+vdTarget  = input.float(60.0, "Target vol % (leveraged leg)", minval=1, step=5, group=group200, tooltip="60 = the validated C4 setting (20% on the underlying; the ratio is leverage-independent).")
+vdLev     = input.float(3.0, "ETF leverage", minval=1, step=1, group=group200)
+vdLen     = input.int(20, "Realized-vol lookback (signal-TF bars)", minval=2, group=group200)
+vdBand    = input.float(10.0, "Rebalance band (pts)", minval=1, step=1, group=group200, tooltip="C4's anti-fiddle rule: act only when the dial moves this many points from the last value you acted on.")
+vdAlertOn = input.bool(false, "Alert when dial moves a full band", group=group200, tooltip="Uses alert() — zero plot cost.")
+// ─── VALUATION & RATES (fundamentals readout — 0 plot slots) ─────────────────
+groupVal  = "Valuation & Rates"
+valOn     = input.bool(false, "Show valuation / rates readout", group=groupVal, tooltip="Table-only, zero plot slots. Rows you switch off disappear entirely rather than showing a blank line.")
+valPos    = input.string("Top Left", "Position", options=["Top Right","Top Center","Top Left","Bottom Right","Bottom Center","Bottom Left"], group=groupVal, tooltip="Top Left is the only corner the rest of this deck leaves free — and it is where TradingView draws the chart legend.")
+valPeOn   = input.bool(true, "P/E (trailing)", group=groupVal, tooltip="close divided by diluted EPS over the last four reported quarters, straight from TradingView's fundamentals feed. Exact on single stocks. Reads n/a on SPY, QQQ, SOXL and anything else without its own earnings.")
+valFwdOn  = input.bool(true, "Forward P/E", group=groupVal, inline="vfwd")
+valFwdEps = input.float(0.0, "· fwd EPS", minval=0.0, step=0.01, group=groupVal, inline="vfwd", tooltip="Next-12-months consensus EPS, typed in — Pine cannot fetch analyst estimates. The readout then shows price divided by this, recalculated live on every tick.")
+valPegOn  = input.bool(true, "PEG", group=groupVal, inline="vpeg")
+valGrw    = input.float(0.0, "· growth %/yr", minval=0.0, step=0.5, group=groupVal, inline="vpeg", tooltip="Expected annual EPS growth in percent — 30 means 30%/yr. PEG = P/E divided by this. Also typed in, same reason.")
+valPegFwd = input.bool(false, "PEG off forward P/E (instead of trailing)", group=groupVal, tooltip="OFF = the usual convention, trailing P/E over growth. ON = forward P/E over growth, which needs the forward EPS above to be set.")
+valY10On  = input.bool(true, "US 10-year yield", group=groupVal)
+valY10Sym = input.symbol("TVC:US10Y", "· yield symbol", group=groupVal, tooltip="TVC:US10Y is quoted directly in percent (4.28 = 4.28%). Free on every TradingView plan.")
+valY10Bp  = input.float(5.0, "· flag move over (bp)", minval=1, step=1, group=groupVal, tooltip="Colour the yield row once today's move clears this many basis points — red for a jump, green for a drop. 100 bp = 1.00%.")
+// ─── 0DTE REGIME SCORE (multi-TF composite readout) ──────────────────────────
+group0dte = "0DTE Regime Score"
+zdOn      = input.bool(true, "Show 0DTE regime table", group=group0dte)
+zdPos     = input.string("Bottom Right", "Table position", options=["Top Right","Top Center","Top Left","Bottom Right","Bottom Center","Bottom Left"], group=group0dte)
+// v6.35 — RENAMED and flipped OFF, so the score stops freezing at the 16:00
+// print on any 24h chart. Pair it with the marks switch in the 0DTE Context
+// group; on its own this gives a live overnight line with no marks under it.
+zdRthData = input.bool(false, "Score on RTH-only bars (untick = use the chart's own session)", group=group0dte, tooltip="Renamed on purpose, same reason as the marks switch: a changed default cannot reach a chart that already saved the old value, but a new title is a new key. OFF (new default) keeps the score moving overnight instead of freezing at the 16:00 print. ON forces RTH-only bars via ticker.modify(session.regular) — the production convention, and the one every validation used. Nothing is validated overnight on any symbol: the decade ES test measured +7.6pp day coverage on a true 24h symbol with NO better per-fire hit rate, and only -4% capture on an equity carrying pre/post bars alone. See ETH_VS_RTH_REPORT.md.")
+zdOneMinOnly = input.bool(true, "Only run on a 1-minute chart", group=group0dte, tooltip="ON (default): the entire 0DTE half of this deck disappears unless the chart is on 1 minute. The score aggregates 2/5/15/60m legs, so above 1m the lower legs return the latest value of a timeframe BELOW the chart's and the reading stops meaning what it says. And the volume-climax z-score was fitted on 1-minute bars.")
+zdTF1     = input.timeframe("2",  "TF 1", group=group0dte, inline="ztfa")
+zdTF2     = input.timeframe("5",  "TF 2", group=group0dte, inline="ztfa")
+zdTF3     = input.timeframe("15", "TF 3", group=group0dte, inline="ztfb")
+zdTF4     = input.timeframe("60", "TF 4", group=group0dte, inline="ztfb")
+zdWEma    = input.float(1.0, "EMA alignment weight",  group=group0dte)
+zdWPrice  = input.float(0.55, "Price vs EMA26 weight", group=group0dte)
+zdWVwap   = input.float(0.15, "VWAP weight",           group=group0dte)
+zdWRsi    = input.float(7.1, "RSI weight",            group=group0dte)
+zdWMacd   = input.float(1.2, "MACD weight",           group=group0dte)
+// ─── 0DTE ALERTS (the separate 11-event layer — zero plot cost) ──────────────
+group0dteA = "0DTE Alerts"
+zdAlertsOn = input.bool(false, "Enable 0DTE alerts (master)", group=group0dteA)
+zdRthOnly  = input.bool(true,  "Only during regular session", group=group0dteA, tooltip="This block's own session gate, kept for backward compatibility — it uses session.ismarket, which on a broker CFD is whatever the broker declares. The market-hours gate in General Settings applies on top of it and uses the New York clock directly, which is the more reliable of the two.")
+zdJsonMsg  = input.bool(false, "Webhook JSON messages", group=group0dteA, tooltip="OFF = human-readable text. ON = one-line JSON payload for routing to Discord / Telegram / Pushover via webhook.")
+zdA1  = input.bool(true, "1 Bull bias engaged",  group=group0dteA, inline="za1")
+zdA2  = input.bool(true, "2 Bear bias engaged",  group=group0dteA, inline="za1")
+zdA3  = input.bool(true, "3 Edge lost (back in neutral band)", group=group0dteA)
+zdA4  = input.bool(true, "4 High conviction +",  group=group0dteA, inline="za4")
+zdA5  = input.bool(true, "5 High conviction -",  group=group0dteA, inline="za4")
+zdA6  = input.bool(true, "6 Alignment 4/4",      group=group0dteA, inline="za6")
+zdA7  = input.bool(true, "7 Alignment broke",    group=group0dteA, inline="za6")
+zdA8  = input.bool(true, "8 Regime change",      group=group0dteA)
+zdA9  = input.bool(true, "9 Label vs score divergence", group=group0dteA)
+zdA10 = input.bool(true, "10 Momentum up / down", group=group0dteA)
+zdA11 = input.bool(true, "11 Reversal is near",   group=group0dteA)
+zdThBull   = input.float(4.0,  "Bullish threshold",              step=0.5, group=group0dteA)
+zdThBear   = input.float(-4.0, "Bearish threshold",              step=0.5, group=group0dteA)
+zdThHi     = input.float(8.5,  "High-conviction level (+/-)",    step=0.5, minval=0.0, group=group0dteA)
+zdMomLk    = input.int(15,     "Momentum lookback (chart bars)", minval=1, maxval=400, group=group0dteA)
+zdMomDelta = input.float(3.0,  "Momentum delta",                 step=0.5, minval=0.1, group=group0dteA)
+zdRevDelta = input.float(1.5,  "Reversal pullback delta",        step=0.5, minval=0.1, group=group0dteA)
+zdHoldBars = input.int(6,      "Extreme-hold bars",              minval=1, group=group0dteA)
+zdARsiOB   = input.float(70,   "Avg-RSI overbought (reversal confirm)", step=1, group=group0dteA)
+zdARsiOS   = input.float(30,   "Avg-RSI oversold (reversal confirm)",   step=1, group=group0dteA)
+// ─── HELPERS ──────────────────────────────────────────────────────────────
+ma(_src, _len, _useEMA) =>
+    _useEMA ? ta.ema(_src, _len) : ta.sma(_src, _len)
+slopeColor(_val, _up, _dn) =>
+    _val >= _val[1] ? _up : _dn
+txtCol(_bg) =>
+    (color.r(_bg) * 0.299 + color.g(_bg) * 0.587 + color.b(_bg) * 0.114) > 128 ? color.black : color.white
+drawTag(_show, _y, _txt, _bg) =>
+    var label lb = na
+    if barstate.islast
+        label.delete(lb)
+        lb := _show ? label.new(bar_index + labelOffset, _y, _txt, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, size=size.small, textcolor=txtCol(_bg), color=_bg) : na
+    lb
+f_pos(_s) =>
+    _s == "Top Right" ? position.top_right : _s == "Top Center" ? position.top_center : _s == "Top Left" ? position.top_left : _s == "Bottom Right" ? position.bottom_right : _s == "Bottom Center" ? position.bottom_center : position.bottom_left
+f_tfTxt(_tf) =>
+    string t = _tf == "" ? timeframe.period : _tf
+    float  m = str.tonumber(t)
+    string o = na(m) ? t : m >= 1440 and m % 1440 == 0 ? str.tostring(m / 1440, "#") + "D" : m >= 60 and m % 60 == 0 ? str.tostring(m / 60, "#") + "h" : str.tostring(m, "#") + "m"
+    o
+// ─── THE NYSE CALENDAR (v6.44) ───────────────────────────────────────────────
+// Every NYSE holiday is a RULE, so we compute them instead of storing a list
+// that rots. No request.security, no data-plan dependency, nothing to maintain,
+// and it cannot repaint. Checked date-for-date against the real NYSE session
+// calendar 2022-2027: exact, holidays and half-days both.
+//
+// The one thing rules cannot predict is an ad-hoc closure (a funeral, a
+// hurricane) — two in the last decade, 2018-12-05 and 2025-01-09. That is what
+// the "Extra market closures" box is for.
+//
+// Pine's dayofweek constants: sunday=1 ... saturday=7.
+
+// Weekday of any calendar date. Noon avoids every DST edge.
+f_dowOf(_y, _m, _d) =>
+    dayofweek(timestamp("America/New_York", _y, _m, _d, 12, 0, 0), "America/New_York")
+
+// Day-of-month of the Nth given weekday (3rd Monday, 4th Thursday, ...).
+f_nthDow(_y, _m, _dow, _n) =>
+    int d1 = f_dowOf(_y, _m, 1)
+    1 + ((_dow - d1 + 7) % 7) + 7 * (_n - 1)
+
+// Day-of-month of the LAST given weekday in a month of _len days.
+f_lastDow(_y, _m, _dow, _len) =>
+    int dl = f_dowOf(_y, _m, _len)
+    _len - ((dl - _dow + 7) % 7)
+
+// Good Friday = Easter Sunday - 2. Anonymous Gregorian computus. All operands
+// are non-negative, so math.floor() is the same truncation Pine's integer
+// division already does — belt and braces, and it reads as the published
+// algorithm rather than as something to be trusted.
+f_goodFriday(_y) =>
+    int a  = _y % 19
+    int b  = int(math.floor(_y / 100))
+    int c  = _y % 100
+    int d  = int(math.floor(b / 4))
+    int e  = b % 4
+    int ff = int(math.floor((b + 8) / 25))
+    int g  = int(math.floor((b - ff + 1) / 3))
+    int h  = (19 * a + b - d - g + 15) % 30
+    int ii = int(math.floor(c / 4))
+    int k  = c % 4
+    int lp = (32 + 2 * e + 2 * ii - h - k) % 7
+    int mm = int(math.floor((a + 11 * h + 22 * lp) / 451))
+    int em = int(math.floor((h + lp - 7 * mm + 114) / 31))
+    int ed = ((h + lp - 7 * mm + 114) % 31) + 1
+    int ts = timestamp("America/New_York", _y, em, ed, 12, 0, 0) - 2 * 86400000
+    [month(ts, "America/New_York"), dayofmonth(ts, "America/New_York")]
+
+// [fully closed, closes early at 13:00] for one New York calendar date.
+f_nyseDay(_y, _m, _d) =>
+    int  nyW  = f_dowOf(_y, 1, 1)
+    // Jan 1 on a Sunday moves to Monday the 2nd. Jan 1 on a SATURDAY is not
+    // observed at all — the market trades the Friday before. That asymmetry is
+    // real and it is the one people get wrong.
+    bool hNY  = _m == 1 and (nyW == dayofweek.sunday ? _d == 2 : nyW == dayofweek.saturday ? false : _d == 1)
+    bool hMLK = _m == 1  and _d == f_nthDow(_y, 1, dayofweek.monday, 3)
+    bool hPRE = _m == 2  and _d == f_nthDow(_y, 2, dayofweek.monday, 3)
+    [gfM, gfD] = f_goodFriday(_y)
+    bool hGF  = _m == gfM and _d == gfD
+    bool hMEM = _m == 5  and _d == f_lastDow(_y, 5, dayofweek.monday, 31)
+    int  junW = f_dowOf(_y, 6, 19)
+    bool hJUN = _y >= 2022 and _m == 6 and _d == (junW == dayofweek.saturday ? 18 : junW == dayofweek.sunday ? 20 : 19)
+    int  indW = f_dowOf(_y, 7, 4)
+    bool hIND = _m == 7  and _d == (indW == dayofweek.saturday ? 3 : indW == dayofweek.sunday ? 5 : 4)
+    bool hLAB = _m == 9  and _d == f_nthDow(_y, 9, dayofweek.monday, 1)
+    int  tgD  = f_nthDow(_y, 11, dayofweek.thursday, 4)
+    bool hTG  = _m == 11 and _d == tgD
+    int  xmW  = f_dowOf(_y, 12, 25)
+    bool hXM  = _m == 12 and _d == (xmW == dayofweek.saturday ? 24 : xmW == dayofweek.sunday ? 26 : 25)
+    bool shut = hNY or hMLK or hPRE or hGF or hMEM or hJUN or hIND or hLAB or hTG or hXM
+    // 13:00 ET closes. July 3 only when July 4 is itself a weekday — when the
+    // 4th lands on a Saturday the 3rd IS the holiday, not a half day.
+    int  j3W  = f_dowOf(_y, 7, 3)
+    bool eJUL = _m == 7  and _d == 3 and j3W != dayofweek.saturday and j3W != dayofweek.sunday and indW != dayofweek.saturday and indW != dayofweek.sunday
+    bool eTG  = _m == 11 and _d == tgD + 1
+    int  x4W  = f_dowOf(_y, 12, 24)
+    bool eXM  = _m == 12 and _d == 24 and x4W != dayofweek.saturday and x4W != dayofweek.sunday and xmW != dayofweek.saturday and xmW != dayofweek.sunday
+    [shut, (eJUL or eTG or eXM) and not shut]
+
+f_pad2(_n) => (_n < 10 ? "0" : "") + str.tostring(_n)
+f_isoDate(_y, _m, _d) => str.tostring(_y) + "-" + f_pad2(_m) + "-" + f_pad2(_d)
+
+// Ad-hoc closures, parsed ONCE rather than rebuilt every bar.
+var array<string> alertHolList = str.split(str.replace_all(alertHolAdd, " ", ""), ",")
+
+// ─── THE MARKET-HOURS ALERT GATE (v6.40, calendar-aware from v6.44) ──────────
+// Declared HERE, above the first alert() in the file, because every alert guard
+// downstream conjoins with it — the cross, the cloud flip, RSI, ADR, Saty, the
+// 200 Line, the vol dial, TD and all three 0DTE families.
+//
+// Read straight off the New York clock rather than session.ismarket. On a
+// broker CFD (SPX500 and friends) "regular session" is whatever the broker
+// declares it to be, which is exactly the ambiguity that let overnight prints
+// through in the first place. 570 = 09:30, 780 = 13:00, 960 = 16:00.
+//
+// TWO CLOCKS, and the difference matters:
+//
+//   INTRADAY charts test the BAR's timestamp. On a 1-minute chart the bar and
+//   the moment it closes are the same thing to within a minute, and the bar
+//   clock is the more precise of the two — it does not care whether the feed
+//   hiccuped or the browser tab was asleep.
+//
+//   DAILY-OR-HIGHER charts test the WALL clock (timenow) plus a grace tail.
+//   Before v6.44 they bypassed the gate entirely, because a daily bar carries
+//   its SESSION OPEN as its timestamp — 00:00 on many symbols — so the bar
+//   clock would have silenced TD Sequential and the 200 Line forever. The wall
+//   clock is the right question to ask there: an alert on a daily chart can
+//   only fire when the bar closes, so "what time is it right now" IS "what
+//   time did this bar close". A US daily close at 16:00 ET lands inside
+//   16:00 + tail; a broker CFD rolling its day at 17:00 or at midnight does
+//   not. That was the last hole.
+alertNyY    = year(time, "America/New_York")
+alertNyM    = month(time, "America/New_York")
+alertNyD    = dayofmonth(time, "America/New_York")
+alertNyMin  = hour(time, "America/New_York") * 60 + minute(time, "America/New_York")
+alertNyDow  = dayofweek(time, "America/New_York")
+// The calendar answer only changes when the DATE changes, so it is computed
+// once per day and held. On a 1-minute chart that is ~1 evaluation per 1440
+// bars instead of one per bar — the difference between a script that loads and
+// a script that trips TradingView's execution budget on top of 33 security
+// calls. The key is YYYYMMDD as a single int.
+var int  calBarKey  = -1
+var bool alertBarShut = false
+var bool alertBarHalf = false
+calBarNow = alertNyY * 10000 + alertNyM * 100 + alertNyD
+if calBarNow != calBarKey
+    calBarKey := calBarNow
+    [bs_, bh_] = f_nyseDay(alertNyY, alertNyM, alertNyD)
+    alertBarShut := bs_ or array.includes(alertHolList, f_isoDate(alertNyY, alertNyM, alertNyD))
+    alertBarHalf := bh_
+alertBarBlack = alertHolOn and alertBarShut
+alertBarEnd   = alertHolOn and alertBarHalf ? 780 : 960
+alertRthNow = alertNyMin >= 570 and alertNyMin < alertBarEnd and alertNyDow != dayofweek.saturday and alertNyDow != dayofweek.sunday and not alertBarBlack
+
+alertWallY   = year(timenow, "America/New_York")
+alertWallM   = month(timenow, "America/New_York")
+alertWallD   = dayofmonth(timenow, "America/New_York")
+alertWallMin = hour(timenow, "America/New_York") * 60 + minute(timenow, "America/New_York")
+alertWallDow = dayofweek(timenow, "America/New_York")
+// Same cache for the wall clock. timenow is constant within one execution but
+// it DOES roll past midnight while a chart is left open, so key it on the date
+// rather than computing it once and trusting it forever.
+var int  calWallKey  = -1
+var bool alertWallShut = false
+var bool alertWallHalf = false
+calWallNow = alertWallY * 10000 + alertWallM * 100 + alertWallD
+if calWallNow != calWallKey
+    calWallKey := calWallNow
+    [ws_, wh_] = f_nyseDay(alertWallY, alertWallM, alertWallD)
+    alertWallShut := ws_ or array.includes(alertHolList, f_isoDate(alertWallY, alertWallM, alertWallD))
+    alertWallHalf := wh_
+alertWallBlack = alertHolOn and alertWallShut
+alertWallEnd   = (alertHolOn and alertWallHalf ? 780 : 960) + alertDailyTail
+alertWallOK  = alertWallMin >= 570 and alertWallMin < alertWallEnd and alertWallDow != dayofweek.saturday and alertWallDow != dayofweek.sunday and not alertWallBlack
+
+alertOK     = not alertsRthOnly or (timeframe.isintraday ? alertRthNow : alertWallOK)
+// What the gate is looking at right now, for the GATE readout row.
+alertShut   = timeframe.isintraday ? alertBarBlack : alertWallBlack
+alertHalf   = alertHolOn and (timeframe.isintraday ? alertBarHalf : alertWallHalf)
+//
+// v6.43 — THE STAMP. Zero cost: string concatenation, no plot, no request.
+// alertNyMin above is derived from the SAME hour()/minute() calls, so what the
+// message prints is literally the clock the gate tested, not a second opinion.
+// A notification without this stamp did not come from this build.
+ALERTVER   = "v6.59"
+alertStamp = " [" + ALERTVER + " " + f_pad2(hour(time, "America/New_York")) + ":" + f_pad2(minute(time, "America/New_York")) + " ET]"
+// ─── COLORS (clouds + tags) ──────────────────────────────────────────────────
+clrM1Up = color.new(color.blue,   85), clrM1Dn = color.new(color.orange, 85)
+clrM2Up = color.new(color.teal,   85), clrM2Dn = color.new(color.red,    85)
+clrM3Up = color.new(color.purple, 85), clrM3Dn = color.new(color.yellow, 85)
+shortUp = color.rgb(128,128,0)
+shortDn = color.maroon
+longUp  = color.green
+longDn  = color.red
+tagC1 = #2E7D32
+tagC3 = #1565C0
+tagM1 = #3949AB
+tagM2 = #00897B
+tagM3 = #8E24AA
+// ─── CLOUD / SMA / WMA CALCULATIONS ──────────────────────────────────────────
+loc1s = ma(src, c1S, useEMA)
+loc1l = ma(src, c1L, useEMA)
+loc3s = ma(src, c3S, useEMA)
+loc3l = ma(src, c3L, useEMA)
+// v6.59 — the chart-timeframe EMA. Local ta.ema, so it costs no data request
+// and it tracks whatever resolution the chart is on.
+ema21 = ta.ema(close, ema21Len)
+mtf1s = request.security(syminfo.tickerid, mtfRes, ta.ema(src, m1S))
+mtf1l = request.security(syminfo.tickerid, mtfRes, ta.ema(src, m1L))
+mtf2s = request.security(syminfo.tickerid, mtfRes, ta.ema(src, m2S))
+mtf2l = request.security(syminfo.tickerid, mtfRes, ta.ema(src, m2L))
+mtf3s = request.security(syminfo.tickerid, mtfRes, ta.ema(src, m3S))
+mtf3l = request.security(syminfo.tickerid, mtfRes, ta.ema(src, m3L))
+// v6.59 — ONE REQUEST INSTEAD OF SIX. These were six separate request.security
+// calls against the SAME symbol on the SAME timeframe — six of the 40 slots for
+// data that arrives in one trip. Bundled into a tuple it is one call, the two
+// new lengths ride along free, and the budget goes 33 -> 28 of 40.
+[sma10, sma20, sma50, sma100, sma150, sma200] = request.security(syminfo.tickerid, smaTF, [ta.sma(close, 10), ta.sma(close, 20), ta.sma(close, 50), ta.sma(close, 100), ta.sma(close, 150), ta.sma(close, 200)], lookahead=barmerge.lookahead_off)
+ma200wSrc = type200w == "WMA" ? ta.wma(close, len200w) : type200w == "EMA" ? ta.ema(close, len200w) : ta.sma(close, len200w)
+ma200w    = request.security(syminfo.tickerid, "W", ma200wSrc, lookahead=barmerge.lookahead_off)
+ma300wSrc = type300w == "WMA" ? ta.wma(close, len300w) : type300w == "EMA" ? ta.ema(close, len300w) : ta.sma(close, len300w)
+ma300w    = request.security(syminfo.tickerid, "W", ma300wSrc, lookahead=barmerge.lookahead_off)
+ma200mSrc = type200m == "WMA" ? ta.wma(close, len200m) : type200m == "EMA" ? ta.ema(close, len200m) : ta.sma(close, len200m)
+ma200m    = request.security(syminfo.tickerid, "M", ma200mSrc, lookahead=barmerge.lookahead_off)
+// ─── VISIBILITY FLAGS (Ripster master gates clouds + MTFs) ───────────────────
+l1 = showRipster and showLocal and c1On
+l3 = showRipster and showLocal and c3On
+m1 = showRipster and showMTF and m1On
+m2 = showRipster and showMTF and m2On
+m3 = showRipster and showMTF and m3On
+// ─── CLOUD PLOTS & FILLS ────────────────────────────────────────────────────
+p1s = plot(l1 ? loc1s : na, color = l1 and showLocalLines ? slopeColor(loc1s, shortUp, shortDn) : na, linewidth=1, offset=leadLocal + globalOffset)
+p1l = plot(l1 ? loc1l : na, color = l1 and showLocalLines ? slopeColor(loc1l, longUp,  longDn)  : na, linewidth=3, offset=leadLocal + globalOffset)
+fill(p1s, p1l, color = l1 ? (loc1s >= loc1l ? color.new(#036103, cloudFade) : color.new(#880e4f, cloudFade)) : na, title="Local Cloud 1")
+p3s = plot(l3 ? loc3s : na, color = l3 and showLocalLines ? slopeColor(loc3s, shortUp, shortDn) : na, linewidth=1, offset=leadLocal + globalOffset)
+p3l = plot(l3 ? loc3l : na, color = l3 and showLocalLines ? slopeColor(loc3l, longUp,  longDn)  : na, linewidth=3, offset=leadLocal + globalOffset)
+fill(p3s, p3l, color = l3 ? (loc3s >= loc3l ? color.new(#2196f3, cloudFade) : color.new(#ffb74d, cloudFade)) : na, title="Local Cloud 3")
+pm1s = plot(m1 ? mtf1s : na, color = m1 and showMTFLines ? slopeColor(mtf1s, color.blue,   color.orange) : na, linewidth=1, offset=leadMTF + globalOffset)
+pm1l = plot(m1 ? mtf1l : na, color = m1 and showMTFLines ? slopeColor(mtf1l, color.blue,   color.orange) : na, linewidth=1, offset=leadMTF + globalOffset)
+fill(pm1s, pm1l, color = m1 ? (mtf1s >= mtf1l ? clrM1Up : clrM1Dn) : na, title="MTF Cloud 1")
+pm2s = plot(m2 ? mtf2s : na, color = m2 and showMTFLines ? slopeColor(mtf2s, color.teal,   color.red) : na, linewidth=1, offset=leadMTF + globalOffset)
+pm2l = plot(m2 ? mtf2l : na, color = m2 and showMTFLines ? slopeColor(mtf2l, color.teal,   color.red) : na, linewidth=1, offset=leadMTF + globalOffset)
+fill(pm2s, pm2l, color = m2 ? (mtf2s >= mtf2l ? clrM2Up : clrM2Dn) : na, title="MTF Cloud 2")
+pm3s = plot(m3 ? mtf3s : na, color = m3 and showMTFLines ? slopeColor(mtf3s, color.purple, color.yellow) : na, linewidth=1, offset=leadMTF + globalOffset)
+pm3l = plot(m3 ? mtf3l : na, color = m3 and showMTFLines ? slopeColor(mtf3l, color.purple, color.yellow) : na, linewidth=1, offset=leadMTF + globalOffset)
+fill(pm3s, pm3l, color = m3 ? (mtf3s >= mtf3l ? clrM3Up : clrM3Dn) : na, title="MTF Cloud 3")
+// ─── DAILY SMA / WMA PLOTS ───────────────────────────────────────────────────
+plot(ema21On ? ema21 : na, color=ema21Col, style=plot.style_line, title="chartEMA21", linewidth=ema21Wid)
+plot(showSMA and sma10On  ? sma10  : na, color=sma10Col,  style=plot.style_linebr, title="dailyMMA10",  linewidth=smaWidth)
+plot(showSMA and sma20On  ? sma20  : na, color=sma20Col,  style=plot.style_linebr, title="dailyMMA20",  linewidth=smaWidth)
+plot(showSMA and sma50On  ? sma50  : na, color=sma50Col,  style=plot.style_line,   title="dailyMMA50",  linewidth=smaWidth)
+plot(showSMA and sma100On ? sma100 : na, color=sma100Col, style=plot.style_line,   title="dailyMMA100", linewidth=smaWidth)
+plot(showSMA and sma150On ? sma150 : na, color=sma150Col, style=plot.style_line,   title="dailyMMA150", linewidth=smaWidth)
+plot(showSMA and sma200On ? sma200 : na, color=sma200Col, style=plot.style_line,   title="dailyMMA200", linewidth=smaWidth)
+plot(show200w ? ma200w : na, color=col200w, style=plot.style_line, title="200-Week MA", linewidth=wid200w)
+plot(show300w ? ma300w : na, color=col300w, style=plot.style_line, title="300-Week MA", linewidth=wid300w)
+plot(show200m ? ma200m : na, color=col200m, style=plot.style_line, title="200-Month MA", linewidth=wid200m)
+// ─── DEATH / GOLDEN CROSS — DETECT + MARK ────────────────────────────────────
+goldenX = ta.crossover(sma50, sma200)
+deathX  = ta.crossunder(sma50, sma200)
+plotchar(showCross and goldenX ? sma200 : na, title="Golden Cross", char="G", location=location.absolute, color=color.new(#FFD700, 0), size=size.small, text="GOLDEN")
+plotchar(showCross and deathX  ? sma200 : na, title="Death Cross",  char="D", location=location.absolute, color=color.new(#e53935, 0), size=size.small, text="DEATH")
+if crossAlertOn and alertOK
+    if goldenX
+        alert("GOLDEN CROSS — daily 50-SMA crossed above 200-SMA on " + syminfo.ticker + alertStamp, alert.freq_once_per_bar_close)
+    if deathX
+        alert("DEATH CROSS — daily 50-SMA crossed below 200-SMA on " + syminfo.ticker + alertStamp, alert.freq_once_per_bar_close)
+// ─── LINE TAGS (right edge) ──────────────────────────────────────────────────
+locPfx = useEMA ? "EMA " : "SMA "
+drawTag(showLabels and l1, (loc1s + loc1l) / 2, locPfx + str.tostring(c1S) + "/" + str.tostring(c1L), tagC1)
+drawTag(showLabels and l3, (loc3s + loc3l) / 2, locPfx + str.tostring(c3S) + "/" + str.tostring(c3L), tagC3)
+drawTag(showLabels and m1, (mtf1s + mtf1l) / 2, "MTF " + str.tostring(m1S) + "/" + str.tostring(m1L), tagM1)
+drawTag(showLabels and m2, (mtf2s + mtf2l) / 2, "MTF " + str.tostring(m2S) + "/" + str.tostring(m2L), tagM2)
+drawTag(showLabels and m3, (mtf3s + mtf3l) / 2, "MTF " + str.tostring(m3S) + "/" + str.tostring(m3L), tagM3)
+drawTag(showLabels and ema21On, ema21, str.tostring(ema21Len) + " EMA (" + f_tfTxt("") + ")", ema21Col)
+drawTag(showLabels and showSMA and sma10On,  sma10,  "SMA 10 ("  + smaTF + ")", sma10Col)
+drawTag(showLabels and showSMA and sma20On,  sma20,  "SMA 20 ("  + smaTF + ")", sma20Col)
+drawTag(showLabels and showSMA and sma50On,  sma50,  "SMA 50 ("  + smaTF + ")", sma50Col)
+drawTag(showLabels and showSMA and sma100On, sma100, "SMA 100 (" + smaTF + ")", sma100Col)
+drawTag(showLabels and showSMA and sma150On, sma150, "SMA 150 (" + smaTF + ")", sma150Col)
+drawTag(showLabels and showSMA and sma200On, sma200, "SMA 200 (" + smaTF + ")", sma200Col)
+drawTag(showLabels and show200w, ma200w, type200w + " 200W", col200w)
+drawTag(showLabels and show300w, ma300w, type300w + " 300W", col300w)
+drawTag(showLabels and show200m, ma200m, type200m + " 200M", col200m)
+// ─── AUTO FIB LEVELS — CALC + LINES (0 plot slots) ───────────────────────────
+[fibH, fibL, fibHb, fibLb] = request.security(syminfo.tickerid, fibTF, [ta.highest(high, fibLen), ta.lowest(low, fibLen), ta.highestbars(high, fibLen), ta.lowestbars(low, fibLen)], lookahead=barmerge.lookahead_off)
+fibOk   = not na(fibH) and not na(fibL)
+fibUp   = fibHb >= fibLb
+fibRng  = fibH - fibL
+fib618  = fibUp ? fibH - 0.618 * fibRng : fibL + 0.618 * fibRng
+fib1618 = fibUp ? fibL + 1.618 * fibRng : fibH - 1.618 * fibRng
+fib50   = (fibH + fibL) / 2.0
+f_fibLine(_show, _y, _txt, _col) =>
+    var line ln = na
+    if barstate.islast
+        line.delete(ln)
+        ln := _show ? line.new(bar_index - 1, _y, bar_index, _y, extend=extend.both, color=_col, style=line.style_dashed, width=1) : na
+    drawTag(_show, _y, _txt, _col)
+f_fibLine(fibOn and fibOk and fibShow618,  fib618,  "Fib 0.618 " + (fibUp ? "sup" : "res") + " (" + fibTF + ")", fibCol618)
+f_fibLine(fibOn and fibOk and fibShow1618, fib1618, "Fib 1.618 target (" + fibTF + ")", fibCol1618)
+f_fibLine(fibOn and fibOk and fibShow50,   fib50,   "Fib 0.50 (" + fibTF + ")", fibCol50)
+// ─── NET DOLLAR VOLUME — CALC + BAND (0 plot slots, 0 data requests) ─────────
+// EVERYTHING IS DRAWN ON THE LAST BAR, in a loop over history. That is the
+// whole reason the baseline is flat.
+//
+// The obvious implementation draws one line per bar as the script walks
+// forward, anchoring each to a ROLLING low — and the baseline then wanders up
+// and down with price, which makes a histogram unreadable. Drawing the whole
+// window on barstate.islast means the anchor and the scale are computed ONCE,
+// from the last bar, and every bar in the window is measured against the same
+// zero. Pine rolls back drawings made on the realtime bar before each
+// recalculation, so the batch is replaced rather than duplicated on every tick
+// and nothing has to be deleted by hand.
+// v6.59 — PLAIN VOLUME, BOTTOM-ANCHORED, THREE-STATE COLOUR.
+// What changed from v6.52/v6.59 and why:
+//   * Was signed net DOLLAR volume centred on a zero line in the middle of the
+//     band. Volume itself is never negative, so a centred zero threw away half
+//     the band's height. The baseline now sits at the BOTTOM and bars grow up,
+//     which doubles the usable resolution for free.
+//   * Scale is the window's tallest bar, so the biggest bar in view touches the
+//     band ceiling. Within the band this genuinely autoscales to volume: a bar
+//     3x the average IS drawn 3x as tall. What the band cannot do is own the
+//     full pane height — see the note below.
+//   * The MA is one polyline, not 300 lines. The line pool is capped at 500 and
+//     the bars already use up to 450 of it; a polyline holds up to 10,000
+//     points and draws from a separate pool, so it costs nothing that matters.
+//
+// HONEST LIMIT: this is an overlay, so it shares the price scale. The band is
+// mapped into a slice of price space with a hand-set height and gap. It cannot
+// "autoscale purely to volume" over the whole pane — no overlay can, by
+// construction. For that you need a second pane, which costs an indicator slot
+// on the Basic plan. See "Vishal's Volume Pane" for the full-height version.
+nvVol   = na(volume) or volume <= 0 ? na : volume
+nvMA    = nvMAType == "EMA" ? ta.ema(volume, nvMALen) : ta.sma(volume, nvMALen)
+nvMax   = ta.highest(nz(nvVol), nvScaleLk)
+nvAvg   = ta.sma(nz(nvVol), 20)
+nvRngHi = ta.highest(high, nvScaleLk)
+nvRngLo = ta.lowest(low, nvScaleLk)
+nvRng   = nvRngHi - nvRngLo
+nvH     = nvRng * nvBandPct / 100.0
+nvBase  = nvRngLo - nvRng * nvGapPct / 100.0 - nvH
+f_nvTxt(_v) =>
+    float a = math.abs(_v)
+    a >= 1e9 ? str.tostring(_v / 1e9, "#.00") + "B" : a >= 1e6 ? str.tostring(_v / 1e6, "#.00") + "M" : a >= 1e3 ? str.tostring(_v / 1e3, "#.0") + "K" : str.tostring(_v, "#")
+// Map a volume value into the band, clamped so a freak bar cannot overshoot.
+f_nvY(_v) => nvBase + math.min(_v / nvMax, 1.0) * nvH
+// v6.59 — THE COLOUR IS A PLAIN SERIES, NOT A FUNCTION OF A BAR OFFSET.
+// v6.54 computed this in f_nvCol(_i), reading nvVol[_i] / nvMA[_i] / close[_i]
+// with the LOOP COUNTER as the history index, from inside a function that is
+// only ever called under barstate.islast. On a live chart every bar came out
+// grey — including bars visibly towering over the MA line — so the one thing
+// the rebuild was for did not work.
+// v6.52's net-dollar band did its indexing INLINE in the loop (nvRaw[i]) and
+// coloured correctly, which is the only thing that changed. So the colour is
+// now an ordinary global series evaluated on EVERY bar, and the loop reads
+// nvBarC[i] exactly the way it reads nvVol[i]. No dynamic index inside a
+// conditionally-called function anywhere.
+nvHot  = not na(nvVol) and not na(nvMA) and nvVol > nvMA
+nvUpB  = nvDirBy == "Close vs previous close" ? close > close[1] : close > open
+nvDnB  = nvDirBy == "Close vs previous close" ? close < close[1] : close < open
+nvBarC = not nvHot ? nvRestCol : nvUpB ? nvUpCol : nvDnB ? nvDnCol : nvFlatCol
+var line     nvZL  = na
+var label    nvLb  = na
+var polyline nvMAp = na
+if barstate.islast
+    line.delete(nvZL)
+    label.delete(nvLb)
+    polyline.delete(nvMAp)
+    if nvOn
+        if not na(nvVol) and not na(nvMax) and nvMax > 0 and nvRng > 0
+            for i = 0 to nvBars - 1
+                float _v = nvVol[i]
+                if not na(_v)
+                    line.new(bar_index - i, nvBase, bar_index - i, f_nvY(_v), xloc=xloc.bar_index, color=nvBarC[i], width=nvWidth)
+            nvZL := line.new(bar_index - nvBars, nvBase, bar_index + labelOffset, nvBase, xloc=xloc.bar_index, color=nvZeroCol, style=line.style_dotted, width=1)
+            if nvMAOn
+                pts = array.new<chart.point>()
+                for i = 0 to nvBars - 1
+                    float _m = nvMA[i]
+                    if not na(_m)
+                        array.push(pts, chart.point.from_index(bar_index - i, f_nvY(_m)))
+                array.reverse(pts)
+                if array.size(pts) > 1
+                    nvMAp := polyline.new(pts, curved=false, xloc=xloc.bar_index, line_color=nvMACol, line_width=nvMAWid)
+            bool   _hotNow = nvHot
+            color  _cNow   = nvBarC
+            // v6.59 — SAY IT IN WORDS SOMEONE CAN ACT ON.
+            // Was: "300.2K  ·  .41x the 20-bar average  ·  resting  ·  volume".
+            // Three things wrong with that. ".41x" has no leading zero so it
+            // scans as a typo. "the 20-bar average" names the MECHANISM, not
+            // the meaning. And "resting" is the only word of judgement in the
+            // whole chip, with no scale to place it on.
+            // Now: "volume 300.2K  ·  0.4x a normal 1h bar  ·  VERY QUIET".
+            // The multiple is stated against "a normal <chart timeframe> bar",
+            // which is what the 20-bar average actually IS, and the band word
+            // puts it on a scale. When a bar is above the average the chip also
+            // names the side, because that is what the green/red is telling you.
+            float  _ratio = na(nvMA) or nvMA <= 0 ? na : nvVol / nvMA
+            string _band  = na(_ratio) ? "warming up" : _ratio >= 3.0 ? "HUGE" : _ratio >= 2.0 ? "HEAVY" : _ratio >= 1.2 ? "BUSY" : _ratio >= 0.8 ? "NORMAL" : _ratio >= 0.5 ? "QUIET" : "VERY QUIET"
+            string _side  = not _hotNow ? "" : nvUpB ? " — buyers" : nvDnB ? " — sellers" : " — mixed"
+            string _mult  = na(_ratio) ? "warming up" : str.tostring(_ratio, "0.0") + "x a normal " + f_tfTxt("") + " bar"
+            nvTx = "volume " + f_nvTxt(nvVol) + "  ·  " + _mult + "  ·  " + _band + _side
+            nvLb := label.new(bar_index + labelOffset, f_nvY(nvVol), nvTx, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, size=size.small, textcolor=txtCol(_cNow), color=_cNow)
+        else
+            nvLb := label.new(bar_index + labelOffset, close, "volume histogram: no volume on " + syminfo.ticker + " — this symbol's feed carries none (SPX500 / NAS100 are CFDs). Chart SPY / QQQ / SOXL / SOXX / TSLA.", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, size=size.small, textcolor=color.white, color=#B71C1C)
+// ─── ALERTS ──────────────────────────────────────────────────────────────────
+if enableAlerts and alertOK
+    if ta.crossover(loc1s, loc1l)
+        alert("Ripster Cloud 1 Bullish Flip (8>9)" + alertStamp, alert.freq_once_per_bar_close)
+    if ta.crossunder(loc1s, loc1l)
+        alert("Ripster Cloud 1 Bearish Flip (8<9)" + alertStamp, alert.freq_once_per_bar_close)
+// ─── RSI — CALC + READOUT ────────────────────────────────────────────────────
+rsiTFUsed = rsiFollow ? "" : rsiTF
+rsiSeries = ta.rsi(rsiSrc, rsiLen)
+rsiVal    = rsiTFUsed == "" ? rsiSeries : request.security(syminfo.tickerid, rsiTFUsed, rsiSeries, lookahead=barmerge.lookahead_off)
+rsiZone   = na(rsiVal) ? "n/a" : rsiVal >= rsiOB ? "OVERBOUGHT" : rsiVal <= rsiOS ? "OVERSOLD" : "neutral"
+rsiCol    = na(rsiVal) ? #607d8b : rsiVal >= rsiOB ? #e53935 : rsiVal <= rsiOS ? #43a047 : #607d8b
+rsiTxt    = na(rsiVal) ? "n/a" : str.tostring(rsiVal, "#.0") + "  " + rsiZone
+rsiLbl    = "RSI " + str.tostring(rsiLen) + " · " + f_tfTxt(rsiTFUsed) + (rsiFollow ? "" : " (locked)")
+rsiReady  = showRSI and not na(rsiVal)
+var table rsiTbl = table.new(f_pos(rsiPos), 2, 1, border_width=1)
+if rsiReady and not rsiMerge and not uiHideBoxes and barstate.islast
+    table.cell(rsiTbl, 0, 0, rsiLbl, text_size=size.small, text_color=color.white, bgcolor=#37474f)
+    table.cell(rsiTbl, 1, 0, rsiTxt, text_size=size.small, text_color=txtCol(rsiCol), bgcolor=rsiCol)
+if rsiAlertOn and alertOK and ta.crossover(rsiVal, rsiOB)
+    alert("RSI OVERBOUGHT: " + syminfo.ticker + " " + f_tfTxt(rsiTFUsed) + " RSI(" + str.tostring(rsiLen) + ") crossed above " + str.tostring(rsiOB, "#.#") + " — now " + str.tostring(rsiVal, "#.0") + alertStamp, alert.freq_once_per_bar_close)
+if rsiAlertOn and alertOK and ta.crossunder(rsiVal, rsiOS)
+    alert("RSI OVERSOLD: " + syminfo.ticker + " " + f_tfTxt(rsiTFUsed) + " RSI(" + str.tostring(rsiLen) + ") crossed below " + str.tostring(rsiOS, "#.#") + " — now " + str.tostring(rsiVal, "#.0") + alertStamp, alert.freq_once_per_bar_close)
+// ─── ADR PULSE — CALC + READOUT + ALERT (0 plot slots, 1 security call) ──────
+f_adrPack(_len, _roll) =>
+    var float wh = na
+    var float wl = na
+    if na(wh) or weekofyear != weekofyear[1]
+        wh := high
+        wl := low
+    else
+        wh := math.max(wh, high)
+        wl := math.min(wl, low)
+    [100.0 * (ta.sma(high / low, _len)[1] - 1.0), ta.sma(high - low, _len)[1], high, low, wh, wl, ta.highest(high, _roll), ta.lowest(low, _roll)]
+lvlTick = satyRthData ? ticker.modify(syminfo.tickerid, session.regular) : syminfo.tickerid
+rthNow = not actRthOnly or not timeframe.isintraday or session.ismarket
+[adrPctRaw, adrPtsRaw, adrDayHi, adrDayLo, adrWkHiRaw, adrWkLoRaw, adrRollHi, adrRollLo] = request.security(lvlTick, "D", f_adrPack(adrLen, adrRollLk), lookahead=barmerge.lookahead_off)
+adrByWeek = adrAnchor == "This week's high"
+adrRefHi  = adrByWeek ? adrWkHiRaw : adrRollHi
+adrRefLo  = adrByWeek ? adrWkLoRaw : adrRollLo
+adrRefTxt = adrByWeek ? "this week" : str.tostring(adrRollLk) + "d"
+adrUnit  = adrBasis == "Percent" ? adrPctRaw * close / 100.0 : adrPtsRaw
+adrPctSh = adrBasis == "Percent" ? adrPctRaw : (close > 0 ? adrPtsRaw / close * 100.0 : na)
+adrOk    = not na(adrUnit) and adrUnit > 0
+adrRet   = adrOk and not na(adrRefHi) ? (adrRefHi - close) / adrUnit : na
+adrExt   = adrOk and not na(adrRefLo) ? (close - adrRefLo) / adrUnit : na
+adrRetCol = na(adrRet) ? #37474f : adrRet >= adrHot * 2 ? #880E4F : adrRet >= adrHot ? #D81B60 : adrRet >= adrHot * 0.6 ? #4527A0 : #37474f
+if adrAlertOn and rthNow and alertOK and ta.crossover(adrRet, adrHot)
+    alert("ADR PULSE: " + syminfo.ticker + " has retraced " + str.tostring(adrRet, "#.00") + "x its ADR(" + str.tostring(adrLen) + ") from the " + adrRefTxt + " high " + str.tostring(adrRefHi, format.mintick) + " | ADR " + str.tostring(adrPctSh, "#.00") + "% | price " + str.tostring(close, format.mintick) + alertStamp, alert.freq_once_per_bar_close)
+// ─── SATY ATR LEVELS — CALC + LINES + READOUT (0 plot slots) ─────────────────
+[satyPiv0, satyAtr0, satyHi0, satyLo0] = request.security(lvlTick, satyTF, [close[1], ta.atr(satyLen)[1], high, low], lookahead=barmerge.lookahead_off)
+var float satyPivH = na
+var float satyAtrH = na
+var float satyHiH  = na
+var float satyLoH  = na
+if rthNow and not na(satyPiv0) and not na(satyAtr0)
+    satyPivH := satyPiv0
+    satyAtrH := satyAtr0
+    satyHiH  := satyHi0
+    satyLoH  := satyLo0
+satyPiv = rthNow ? satyPiv0 : satyPivH
+satyAtr = rthNow ? satyAtr0 : satyAtrH
+satyHi  = rthNow ? satyHi0  : satyHiH
+satyLo  = rthNow ? satyLo0  : satyLoH
+satyOk   = not na(satyPiv) and not na(satyAtr) and satyAtr > 0
+satyUsed = satyOk and not na(satyHi) and not na(satyLo) ? (satyHi - satyLo) / satyAtr * 100.0 : na
+satyUpT  = satyPiv + 0.236 * satyAtr
+satyDnT  = satyPiv - 0.236 * satyAtr
+satyUpM  = satyPiv + 0.618 * satyAtr
+satyDnM  = satyPiv - 0.618 * satyAtr
+satyUpF  = satyPiv + 1.000 * satyAtr
+satyDnF  = satyPiv - 1.000 * satyAtr
+satyUpX1 = satyPiv + 1.618 * satyAtr
+satyDnX1 = satyPiv - 1.618 * satyAtr
+satyUpX2 = satyPiv + 2.618 * satyAtr
+satyDnX2 = satyPiv - 2.618 * satyAtr
+satyUpX3 = satyPiv + 4.236 * satyAtr
+satyDnX3 = satyPiv - 4.236 * satyAtr
+var int satyAnchor = na
+if na(satyAnchor) or (not na(satyPiv) and not na(satyPiv[1]) and satyPiv != satyPiv[1])
+    satyAnchor := bar_index
+f_satyLine(_show, _y, _txt, _col, _style) =>
+    var line  ln = na
+    var label lb = na
+    if barstate.islast
+        line.delete(ln)
+        label.delete(lb)
+        if _show and not na(_y)
+            _x1 = satyScope == "Across the chart" ? bar_index - 1 : math.min(satyAnchor, bar_index)
+            ln := line.new(_x1, _y, bar_index + satyPad, _y, xloc=xloc.bar_index, extend=(satyScope == "Across the chart" ? extend.both : extend.none), color=_col, style=_style, width=1)
+            lb := satyLabels ? label.new(bar_index + satyPad, _y, _txt + "  " + str.tostring(_y, format.mintick), xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, size=size.small, textcolor=txtCol(_col), color=_col) : na
+    lb
+satyDraw = satyOn and satyOk
+f_satyLine(satyDraw, satyPiv, "Pivot (prev close)", satyColPiv, line.style_solid)
+f_satyLine(satyDraw and satyShowTrig, satyUpT, "Trigger up 0.236", satyColTrig, line.style_dashed)
+f_satyLine(satyDraw and satyShowTrig, satyDnT, "Trigger dn 0.236", satyColTrig, line.style_dashed)
+f_satyLine(satyDraw and satyShowMid, satyUpM, "Mid up 0.618", satyColMid, line.style_dotted)
+f_satyLine(satyDraw and satyShowMid, satyDnM, "Mid dn 0.618", satyColMid, line.style_dotted)
+f_satyLine(satyDraw and satyShowTgt, satyUpF, "Target up 1 ATR", satyColTgt, line.style_solid)
+f_satyLine(satyDraw and satyShowTgt, satyDnF, "Target dn 1 ATR", satyColTgt, line.style_solid)
+f_satyLine(satyDraw and satyShowExt, satyUpX1, "Ext up 1.618", satyColExt, line.style_dotted)
+f_satyLine(satyDraw and satyShowExt, satyDnX1, "Ext dn 1.618", satyColExt, line.style_dotted)
+f_satyLine(satyDraw and satyShowExt, satyUpX2, "Ext up 2.618", satyColExt, line.style_dotted)
+f_satyLine(satyDraw and satyShowExt, satyDnX2, "Ext dn 2.618", satyColExt, line.style_dotted)
+f_satyLine(satyDraw and satyShowExt, satyUpX3, "Ext up 4.236", satyColExt, line.style_dotted)
+f_satyLine(satyDraw and satyShowExt, satyDnX3, "Ext dn 4.236", satyColExt, line.style_dotted)
+satyZone = not satyOk ? "n/a" : close > satyUpT ? "LONG SIDE" : close < satyDnT ? "SHORT SIDE" : "CHOP"
+satyZCol = not satyOk ? #37474f : close > satyUpT ? #2E7D32 : close < satyDnT ? #B71C1C : #546E7A
+satyUCol = na(satyUsed) ? #37474f : satyUsed >= 100 ? #E65100 : satyUsed >= 70 ? #F9A825 : #37474f
+// ─── BREAK / FAIL STATE MACHINE ──────────────────────────────────────────────
+satyNewPeriod = not na(satyPiv) and not na(satyPiv[1]) and satyPiv != satyPiv[1]
+var int   satySide = 0
+var float satyBest = na
+bool  satyFailUp = false
+bool  satyFailDn = false
+float satyFailRun = na
+if satyNewPeriod
+    satySide := 0
+    satyBest := na
+if satyOk and rthNow
+    if satySide == 1
+        satyBest := na(satyBest) ? high : math.max(satyBest, high)
+        if close < satyUpT and (satyBest - satyUpT) >= satyFailMin * satyAtr
+            satyFailUp  := true
+            satyFailRun := (satyBest - satyPiv) / satyAtr
+            satySide    := 0
+            satyBest    := na
+    else if satySide == -1
+        satyBest := na(satyBest) ? low : math.min(satyBest, low)
+        if close > satyDnT and (satyDnT - satyBest) >= satyFailMin * satyAtr
+            satyFailDn  := true
+            satyFailRun := (satyPiv - satyBest) / satyAtr
+            satySide    := 0
+            satyBest    := na
+    if satySide == 0 and not satyFailUp and not satyFailDn
+        if close > satyUpT
+            satySide := 1
+            satyBest := high
+        else if close < satyDnT
+            satySide := -1
+            satyBest := low
+// ─── WHAT TO DO — the state machine turned into words ────────────────────────
+satyFailedNow = satyFailUp or satyFailDn
+var bool satyFailedSession = false
+var int  satyFailedDir     = 0
+if satyNewPeriod
+    satyFailedSession := false
+    satyFailedDir     := 0
+if satyFailedNow
+    satyFailedSession := true
+    satyFailedDir     := satyFailUp ? 1 : -1
+actLate  = satySide != 0 and not na(satyUsed) and satyUsed >= actLateAt
+actState = not rthNow ? 5 : satyFailedNow ? 3 : satySide == 1 ? 1 : satySide == -1 ? 2 : satyFailedSession ? 4 : 0
+actAbortTxt = satyFailUp ? "ABORT — UP FAILED" : "ABORT — DOWN FAILED"
+actAfterTxt = satyFailedDir == 1 ? "NO MOMENTUM · UP FAILED" : "NO MOMENTUM · DOWN FAILED"
+actTxt   = actState == 5 ? "OUT OF HOURS" : actState == 3 ? actAbortTxt : actState == 1 ? "MOMENTUM UP" + (actLate ? "  (LATE)" : "") : actState == 2 ? "MOMENTUM DOWN" + (actLate ? "  (LATE)" : "") : actState == 4 ? actAfterTxt : "NO MOMENTUM"
+actBg    = actState == 5 ? #37474f : actState == 3 ? #212121 : actState == 1 ? #2E7D32 : actState == 2 ? #C62828 : #546E7A
+actFg    = actState == 3 ? #FFD54F : color.white
+actLadLbl = satySide == 1 ? "SELL BELOW" : "SELL ABOVE"
+actLadTxt = satySide == 1 ? str.tostring(satyDnT, format.mintick) + " · " + str.tostring(satyDnM, format.mintick) + " · " + str.tostring(satyDnF, format.mintick) : satySide == -1 ? str.tostring(satyUpT, format.mintick) + " · " + str.tostring(satyUpM, format.mintick) + " · " + str.tostring(satyUpF, format.mintick) : ""
+actLadOn  = actLadder and satySide != 0 and satyOk and rthNow
+// ─── EXPECTED MOVE — CALC + BAND (0 plot slots, 0 extra requests) ────────────
+// This is the V-BOUNCE gate's request, WIDENED rather than duplicated — which
+// is why the block is free. It therefore has to live here, above the gate's own
+// use of zdVixOpen further down.
+//
+// lookahead_on on the OPEN is harmless: a session's open is known at the open,
+// which is why the gate used it. On the CLOSE it genuinely does return future
+// data on historical bars. That is safe ONLY because emVixNow is read nowhere
+// except under barstate.islast — both the band and the row. DO NOT reuse
+// emVixNow anywhere that evaluates on every bar, and DO NOT let an alert
+// condition touch it: it would backtest beautifully and fail live.
+[zdVixOpen, emVixNow] = request.security(zdVixTkr, "D", [open, close], lookahead=barmerge.lookahead_on)
+emIsSp   = str.contains(syminfo.ticker, "SPX") or str.contains(syminfo.ticker, "SPY") or (syminfo.type == "futures" and str.startswith(syminfo.ticker, "ES"))
+emIv     = emIvManual > 0 ? emIvManual : (emIsSp ? emVixNow : na)
+emAnch   = emAnchor == "Current price" ? close : satyPiv
+emSig    = na(emIv) or na(emAnch) or emAnch <= 0 ? na : emAnch * (emIv / 100.0) * math.sqrt(emDays / 252.0)
+emUp     = na(emSig) ? na : emAnch + emSig
+emDn     = na(emSig) ? na : emAnch - emSig
+// The comparison worth having: implied (what you are paid) against realised
+// (what the tape actually delivers). Dividing the horizon back out makes the
+// ratio independent of emDays, so it reads the same for 0DTE and for a week.
+emVsAtr  = na(emSig) or not satyOk or satyAtr <= 0 ? na : emSig / (satyAtr * math.sqrt(emDays))
+emVerdict = na(emVsAtr) ? "" : emVsAtr >= emRichAt ? "  RICH" : emVsAtr <= 1.0 / emRichAt ? "  THIN" : ""
+emRowCol = na(emVsAtr) ? #37474f : emVsAtr >= emRichAt ? #00695C : emVsAtr <= 1.0 / emRichAt ? #E65100 : #37474f
+emTxt    = na(emSig) ? (emIsSp ? "no vol data" : "set IV % in settings") : "+/-" + str.tostring(emSig, format.mintick) + "  (" + str.tostring(emSig / emAnch * 100, "#.00") + "%)" + (na(emVsAtr) ? "" : "  ·  " + str.tostring(emVsAtr, "#.00") + (pulsePlain ? "x a normal day" : "x ATR") + emVerdict)
+f_emLine(_show, _y, _txt) =>
+    var line  ln = na
+    var label lb = na
+    if barstate.islast
+        line.delete(ln)
+        label.delete(lb)
+        if _show and not na(_y)
+            ln := line.new(bar_index - 1, _y, bar_index + labelOffset, _y, xloc=xloc.bar_index, color=emCol, style=line.style_dashed, width=1)
+            lb := label.new(bar_index + labelOffset, _y, _txt, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, size=size.small, textcolor=txtCol(emCol), color=emCol)
+    lb
+f_emLine(emOn and emLines and not na(emUp), emUp, "EM up " + str.tostring(emUp, format.mintick))
+f_emLine(emOn and emLines and not na(emDn), emDn, "EM dn " + str.tostring(emDn, format.mintick))
+// ─── PULSE READOUT — the one merged box (0 plot slots) ───────────────────────
+pulseTxt = pulseBig ? size.normal : size.small
+pulseLbl = #37474f
+pZoneTxt = not pulsePlain ? satyZone : satyZone == "LONG SIDE" ? "GOING UP" : satyZone == "SHORT SIDE" ? "GOING DOWN" : satyZone == "CHOP" ? "GOING NOWHERE" : "no data"
+pRetLbl  = pulsePlain ? "FELL"  : "STRETCH"
+pUseLbl  = pulsePlain ? "MOVED" : "USED"
+pNoData  = pulsePlain ? "no data" : "n/a"
+// v6.59 — the row now ANSWERS "is that too much?" instead of making you
+// remember the colour code. These words use the SAME thresholds as adrRetCol
+// above, so the text and the background can never disagree.
+pRetHow  = na(adrRet) ? "" : adrRet >= adrHot * 2 ? " · VERY DEEP" : adrRet >= adrHot ? " · DEEP" : adrRet >= adrHot * 0.6 ? " · getting deep" : " · normal"
+pRetTxt  = na(adrRet) ? pNoData : (pulsePlain ? str.tostring(math.max(adrRet, 0), "#.0") + " normal days" + pRetHow : str.tostring(math.max(adrRet, 0), "#.00") + " x ADR" + (adrRet >= adrHot ? "  !" : ""))
+pUseTxt  = na(satyUsed) ? pNoData : str.tostring(satyUsed, "#") + (pulsePlain ? "% of a normal day" : "% of ATR")
+// 8 rows, not 6: base 3 + expected move + ladder + week high + week low + raw.
+// 8 rows, not 6: header + FELL + MOVED + expected move + ladder + top + rose + raw.
+var table pulseT = table.new(f_pos(pulsePos), 2, 8, border_width=1)
+if pulseOn and not uiHideBoxes and barstate.islast
+    // v6.59 — MUST clear. Rows are now counter-driven, so the table can SHRINK
+    // when a row is switched off. Without this, cells written on an earlier
+    // realtime tick stay behind and the box shows a stale row forever.
+    table.clear(pulseT, 0, 0, 1, 7)
+    int _r = 0
+    if pulseHdr
+        table.cell(pulseT, 0, _r, syminfo.ticker, text_size=pulseTxt, text_color=color.white, bgcolor=#263238)
+        table.cell(pulseT, 1, _r, actHeader ? actTxt : pZoneTxt, text_size=pulseTxt, text_color=actHeader ? actFg : color.white, bgcolor=actHeader ? actBg : satyZCol)
+        _r += 1
+    table.cell(pulseT, 0, _r, pRetLbl, text_size=pulseTxt, text_color=color.white, bgcolor=adrRetCol)
+    table.cell(pulseT, 1, _r, pRetTxt, text_size=pulseTxt, text_color=color.white, bgcolor=adrRetCol)
+    _r += 1
+    table.cell(pulseT, 0, _r, pUseLbl, text_size=pulseTxt, text_color=color.white, bgcolor=satyUCol)
+    table.cell(pulseT, 1, _r, pUseTxt, text_size=pulseTxt, text_color=color.white, bgcolor=satyUCol)
+    _r += 1
+    if emOn and emRow
+        table.cell(pulseT, 0, _r, pulsePlain ? "PRICED FOR" : "EXP MOVE", text_size=pulseTxt, text_color=color.white, bgcolor=emRowCol)
+        table.cell(pulseT, 1, _r, emTxt, text_size=pulseTxt, text_color=color.white, bgcolor=emRowCol)
+        _r += 1
+    if actLadOn
+        table.cell(pulseT, 0, _r, actLadLbl, text_size=pulseTxt, text_color=color.white, bgcolor=pulseLbl)
+        table.cell(pulseT, 1, _r, actLadTxt, text_size=pulseTxt, text_color=color.white, bgcolor=pulseLbl)
+        _r += 1
+    if pulseShowWk
+        table.cell(pulseT, 0, _r, pulsePlain ? "TOP" : "Wk high", text_size=pulseTxt, text_color=color.white, bgcolor=pulseLbl)
+        table.cell(pulseT, 1, _r, na(adrRefHi) ? pNoData : str.tostring(adrRefHi, format.mintick) + "  " + adrRefTxt, text_size=pulseTxt, text_color=color.white, bgcolor=pulseLbl)
+        _r += 1
+    if pulseShowLow
+        table.cell(pulseT, 0, _r, pulsePlain ? "ROSE" : "Off wk low", text_size=pulseTxt, text_color=color.white, bgcolor=pulseLbl)
+        table.cell(pulseT, 1, _r, na(adrExt) ? pNoData : (pulsePlain ? str.tostring(math.max(adrExt, 0), "#.0") + " normal days" : "+" + str.tostring(math.max(adrExt, 0), "#.00") + " x"), text_size=pulseTxt, text_color=color.white, bgcolor=pulseLbl)
+        _r += 1
+    if pulseShowRaw
+        table.cell(pulseT, 0, _r, pulsePlain ? "A DAY IS" : "ADR / ATR", text_size=pulseTxt, text_color=color.white, bgcolor=pulseLbl)
+        table.cell(pulseT, 1, _r, (na(adrUnit) ? pNoData : str.tostring(adrUnit, format.mintick)) + "  /  " + (na(satyAtr) ? pNoData : str.tostring(satyAtr, format.mintick)), text_size=pulseTxt, text_color=color.white, bgcolor=pulseLbl)
+        _r += 1
+actArmUp = satySide == 1 and satySide[1] != 1
+actArmDn = satySide == -1 and satySide[1] != -1
+actSz  = actMarkSize == "Normal" ? size.normal : actMarkSize == "Tiny" ? size.tiny : size.small
+chartAtr = ta.atr(14)
+actGap   = na(chartAtr) ? 0.0 : actMarkGap * chartAtr
+if actMark and actArmUp
+    label.new(bar_index, low - actGap, "MOMENTUM UP", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, size=actSz, color=#2E7D32, textcolor=color.white)
+if actMark and actArmDn
+    label.new(bar_index, high + actGap, "MOMENTUM DN", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, size=actSz, color=#C62828, textcolor=color.white)
+if actMark and satyFailUp
+    label.new(bar_index, high + actGap, "UP FAILED", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_down, size=actSz, color=#212121, textcolor=#FFD54F)
+if actMark and satyFailDn
+    label.new(bar_index, low - actGap, "DOWN FAILED", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_up, size=actSz, color=#212121, textcolor=#FFD54F)
+if satyFailOn and rthNow and alertOK and satyFailUp
+    alert("ABORT — UPSIDE MOMENTUM FAILED: " + syminfo.ticker + " closed back under the trigger " + str.tostring(satyUpT, format.mintick) + " after running " + str.tostring(satyFailRun, "#.00") + "x ATR. Anything positioned behind that move is on the wrong side now. Pivot " + str.tostring(satyPiv, format.mintick) + " | ATR used " + str.tostring(satyUsed, "#") + "%" + alertStamp, alert.freq_once_per_bar_close)
+if satyFailOn and rthNow and alertOK and satyFailDn
+    alert("ABORT — DOWNSIDE MOMENTUM FAILED: " + syminfo.ticker + " closed back above the trigger " + str.tostring(satyDnT, format.mintick) + " after running " + str.tostring(satyFailRun, "#.00") + "x ATR. Anything positioned behind that move is on the wrong side now. Pivot " + str.tostring(satyPiv, format.mintick) + " | ATR used " + str.tostring(satyUsed, "#") + "%" + alertStamp, alert.freq_once_per_bar_close)
+if satyAlertOn and rthNow and alertOK and satyOk and ta.crossover(close, satyUpT)
+    alert("MOMENTUM UP: " + syminfo.ticker + " closed through the upper trigger " + str.tostring(satyUpT, format.mintick) + ". Runs toward " + str.tostring(satyUpM, format.mintick) + " / " + str.tostring(satyUpF, format.mintick) + ". Downside levels " + str.tostring(satyDnT, format.mintick) + " · " + str.tostring(satyDnM, format.mintick) + " · " + str.tostring(satyDnF, format.mintick) + " | ATR already used " + str.tostring(satyUsed, "#") + "%" + alertStamp, alert.freq_once_per_bar_close)
+if satyAlertOn and rthNow and alertOK and satyOk and ta.crossunder(close, satyDnT)
+    alert("MOMENTUM DOWN: " + syminfo.ticker + " closed through the lower trigger " + str.tostring(satyDnT, format.mintick) + ". Runs toward " + str.tostring(satyDnM, format.mintick) + " / " + str.tostring(satyDnF, format.mintick) + ". Upside levels " + str.tostring(satyUpT, format.mintick) + " · " + str.tostring(satyUpM, format.mintick) + " · " + str.tostring(satyUpF, format.mintick) + " | ATR already used " + str.tostring(satyUsed, "#") + "%" + alertStamp, alert.freq_once_per_bar_close)
+// ─── THE 200 LINE — CALC + VISUALS + ALERTS ──────────────────────────────────
+tlChartTk = str.upper(syminfo.ticker)
+tlMapped  = (tlChartTk == "TQQQ" or tlChartTk == "QLD") ? "QQQ" : (tlChartTk == "UPRO" or tlChartTk == "SPXL" or tlChartTk == "SPYU" or tlChartTk == "SSO") ? "SPY" : tlChartTk == "TNA" ? "IWM" : tlChartTk == "SOXL" ? "SOXX" : tlChartTk == "UDOW" ? "DIA" : syminfo.tickerid
+tlSymUsed = tlAuto ? tlMapped : tlSym
+tlIsCrypto = syminfo.type == "crypto" or str.contains(tlChartTk, "BTC") or str.contains(tlChartTk, "ETH")
+tlIsMetal  = str.contains(tlChartTk, "XAU") or str.contains(tlChartTk, "XAG") or str.contains(tlChartTk, "GOLD") or tlChartTk == "GLD" or tlChartTk == "SLV" or tlChartTk == "IAU"
+tlBufEff   = not tlBufAuto ? tlBuf : tlIsCrypto ? 5.0 : tlIsMetal ? 1.5 : 2.0
+[tlClose, tlSMA, tlEMA, tlSMAp, tlEMAp, tlSd] = request.security(tlSymUsed, tlTF, [close, ta.sma(close, tlLen), ta.ema(close, tlLen), ta.sma(close, tlLen)[tlSlopeLk], ta.ema(close, tlLen)[tlSlopeLk], ta.stdev(close / close[1] - 1, vdLen, false)], lookahead=barmerge.lookahead_off)
+tlMA    = tlType == "EMA" ? tlEMA : tlSMA
+tlMAp   = tlType == "EMA" ? tlEMAp : tlSMAp
+tlRising = not na(tlMAp) and tlMA > tlMAp
+tlBufF  = tlBufEff / 100.0
+tlUpper = tlMA * (1.0 + tlBufF)
+tlLower = tlMA * (1.0 - tlBufF)
+var int tlState = 0
+tlState := na(tlClose) or na(tlMA) ? tlState : (tlClose > tlUpper and (not tlSlopeOn or tlRising) ? 1 : (tlClose < tlLower ? 0 : tlState))
+tlEnter = tlState == 1 and tlState[1] == 0
+tlExit  = tlState == 0 and tlState[1] == 1
+bgcolor(tlShowBg ? (tlState == 1 ? color.new(color.green, 90) : color.new(color.red, 90)) : na, title="200 Line Regime")
+plotshape(tlShowSig and tlEnter, title="200 Line IN",  style=shape.triangleup,   location=location.belowbar, color=color.new(color.green, 0), size=size.small, text="IN")
+plotshape(tlShowSig and tlExit,  title="200 Line OUT", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0),   size=size.small, text="OUT")
+tlSameSym = str.contains(str.upper(syminfo.ticker), str.upper(tlSymUsed)) or str.contains(str.upper(tlSymUsed), str.upper(syminfo.ticker))
+plot(tlShowMA and tlSameSym ? tlMA : na, title="The 200 Line", color=color.new(color.orange, 0), linewidth=2)
+if tlAlertOn and alertOK and tlEnter
+    alert("200 LINE — TREND UP: " + tlSymUsed + " closed above its " + str.tostring(tlLen) + " " + tlType + " band (" + str.tostring(tlBufEff, "#.#") + "%). Deploy / re-enter. | chart " + syminfo.ticker + alertStamp, alert.freq_once_per_bar_close)
+if tlAlertOn and alertOK and tlExit
+    alert("200 LINE — TREND DOWN: " + tlSymUsed + " closed below its " + str.tostring(tlLen) + " " + tlType + " band (" + str.tostring(tlBufEff, "#.#") + "%). Step aside to cash. | chart " + syminfo.ticker + alertStamp, alert.freq_once_per_bar_close)
+// ─── VOL DIAL — CALC + READOUT + BAND ALERT (0 plot slots) ───────────────────
+vdRv   = tlSd * math.sqrt(252) * vdLev
+// v6.59 — the SAME volatility expressed as a typical DAY instead of a year.
+// vdRv is annualised (daily stdev x sqrt(252) x leverage). Dividing back by
+// sqrt(252) cancels it, so the typical daily move is simply the raw daily
+// return stdev times leverage. One standard deviation: ~2 days in 3 land
+// inside it, 1 in 20 beyond double it.
+vdDay  = na(tlSd) ? na : tlSd * vdLev * 100
+vdDial = na(vdRv) or vdRv <= 0 ? na : math.min(1.0, (vdTarget / 100.0) / vdRv)
+vdEff  = tlState == 1 ? vdDial : 0.0
+vdRsiHere = rsiReady and rsiMerge
+var table vdT = table.new(f_pos(vdPos), 2, 3, border_width=1)
+if (vdOn or vdShowSt or vdRsiHere) and not uiHideBoxes and barstate.islast
+    table.clear(vdT, 0, 0, 1, 2)
+    int vdRow = 0
+    if vdShowSt
+        vdStCol = tlState == 1 ? #2E7D32 : #B71C1C
+        table.cell(vdT, 0, vdRow, pulsePlain ? "TREND" : "200 LINE", text_size=size.small, text_color=color.white, bgcolor=#37474f)
+        table.cell(vdT, 1, vdRow, pulsePlain ? (tlState == 1 ? "OK TO HOLD" : "STAY OUT") : (tlState == 1 ? "IN" : "OUT"), text_size=size.small, text_color=color.white, bgcolor=vdStCol)
+        vdRow += 1
+    if vdOn
+        // v6.59 — PLAIN-ENGLISH SIZING.
+        // The maths did not change; the words did. vdEff is the fraction of this
+        // sleeve to hold in the leveraged leg, so the useful sentence is the
+        // split: how much in, how much left in cash. "rv 68%" was the realized
+        // annual volatility of the leveraged leg — true, and meaningless to
+        // anyone who has not read the C4 note. v6.59 called it "swings ~68%/yr",
+        // which is WORSE than jargon: it reads like "gains 68% a year". It is a
+        // standard deviation, not a return. v6.59 states it as the typical DAY,
+        // which is the form you actually feel and cannot misread as profit.
+        // When the trend says OUT the dial is 0%, and it says what it WOULD be,
+        // because "0%" with no second number looks like a broken readout.
+        vdInPct  = na(vdDial) ? na : vdEff * 100
+        vdWouldP = na(vdDial) ? na : vdDial * 100
+        vdPlain  = na(vdDial) ? "no data" : str.tostring(vdInPct, "#") + "% in  ·  " + str.tostring(100 - vdInPct, "#") + "% cash" + (tlState == 1 ? "" : "   (would be " + str.tostring(vdWouldP, "#") + "%)") + (na(vdDay) ? "" : "   typical day +/-" + str.tostring(vdDay, "#.0") + "%")
+        vdJargon = na(vdDial) ? "n/a" : str.tostring(vdEff * 100, "#") + "%" + (tlState == 1 ? "" : " (dial " + str.tostring(vdDial * 100, "#") + "%)") + "  rv " + str.tostring(vdRv * 100, "#") + "%"
+        table.cell(vdT, 0, vdRow, pulsePlain ? "HOW MUCH IN" : "VOL DIAL", text_size=size.small, text_color=color.white, bgcolor=#37474f)
+        table.cell(vdT, 1, vdRow, pulsePlain ? vdPlain : vdJargon, text_size=size.small, text_color=txtCol(#FFD54F), bgcolor=#FFD54F)
+        vdRow += 1
+    if vdRsiHere
+        table.cell(vdT, 0, vdRow, rsiLbl, text_size=size.small, text_color=color.white, bgcolor=#37474f)
+        table.cell(vdT, 1, vdRow, rsiTxt, text_size=size.small, text_color=txtCol(rsiCol), bgcolor=rsiCol)
+        vdRow += 1
+var float vdRef = na
+if not na(vdEff) and barstate.isconfirmed
+    if na(vdRef)
+        vdRef := vdEff
+    else if math.abs(vdEff - vdRef) * 100 >= vdBand
+        if vdAlertOn and alertOK
+            alert("VOL DIAL: adjust " + str.tostring(vdRef * 100, "#") + "% to " + str.tostring(vdEff * 100, "#") + "% (rv " + str.tostring(vdRv * 100, "#") + "%, 200 Line " + (tlState == 1 ? "IN" : "OUT") + ") | " + syminfo.ticker + alertStamp, alert.freq_once_per_bar_close)
+        vdRef := vdEff
+// ─── TD SEQUENTIAL (DeMark, always measured on DAILY bars) ───────────────────
+// WHY IT IS A REQUEST.SECURITY AND NOT A CHART-TIMEFRAME COUNT: a TD count on
+// 1-minute bars is a different indicator that happens to share a name. You asked
+// for the daily one, so the daily one is what this computes — on every chart,
+// including the 1-minute 0DTE chart, where it is slow context behind the fast
+// dial. One extra security call and ZERO plot slots: the levels are line.new and
+// the counts are labels, the same trick the Saty levels use.
+//
+// WHAT THE DECADE SAYS, measured by replaying THIS EXACT ALGORITHM (strict 13,
+// both cancels on) over SPX daily, 2,518 sessions 2016-07 to 2026-07:
+//     BUY setup 9        n=19   +0.46pp (5d)   [-0.84,+1.73]   3/5
+//     SELL setup 9       n=71   +0.81pp (20d)  [-0.19,+1.98]   5/11
+//     SELL countdown 13  n=21   +0.73pp (5d)   [-0.09,+1.55]   5/8
+//     BUY countdown 13    n=3   NOT TESTABLE — three events in ten years
+// EVERY interval includes zero and nothing held its sign in even 2/3 of its
+// years. Read that as "a decade of SPX gives no evidence for it", NOT as "it
+// does not work" — n=3 could not have shown an edge if one existed. It is
+// CONTEXT, at the same status as the 1/2/3 exhaustion marks, which at least
+// have a measured rate. It is OFF by default for that reason.
+// One more receipt: the strict-13 leg never once changed the count on SPX daily
+// this decade (0 deferrals in 2,518 sessions). Correct, DeMark's rule, and on
+// this instrument cosmetic. It will matter on faster or choppier symbols.
+groupTD    = "TD Sequential (daily)"
+tdOn       = input.bool(false, "Show TD Sequential (daily counts)", group=groupTD, tooltip="Off by default because it has no measured edge on this instrument — see the numbers in the source header. Turning it on costs one data request and no plot slots.")
+tdDailyOnly = input.bool(true, "Only draw it on a daily-or-higher chart", group=groupTD, tooltip="ON (default): the counts and levels draw only when the chart itself is daily, weekly or monthly. This is the honest setting.\n\nWHY. On an intraday chart the daily bar is still FORMING, so the daily count this reads is a DEVELOPING value — a 9 can appear at 11am and be gone by 2pm if the close moves back through close[4]. That is repainting, and it is real rather than a Pine quirk: the setup genuinely has not completed until the session closes. Untick it and you get the developing count as context, which is legitimate to LOOK at and not legitimate to act on. Alerts stay gated to a daily chart either way.")
+tdShowAll  = input.bool(false, "Show setup counts 1-8", group=groupTD, tooltip="Off keeps only the 9s, which is what you are actually looking for, and keeps the label count down on a long chart.")
+tdShow9    = input.bool(true,  "Show the 9", group=groupTD)
+tdPerfOn   = input.bool(true,  "Mark perfection (unperfected 9s print hollow)", group=groupTD, tooltip="A buy 9 is perfected when the low of bar 8 or 9 is at or below the lows of bars 6 and 7 (sell: the highs, mirrored). DeMark treats an unperfected setup as incomplete — the count happened, the condition did not. Most free scripts skip this entirely.")
+tdCdOn     = input.bool(true,  "Run the countdown (1-13)", group=groupTD, tooltip="Non-consecutive, unlike the setup: a bar qualifies on close <= low[2] for a buy, close >= high[2] for a sell.")
+tdShow13   = input.bool(true,  "Show the 13", group=groupTD)
+tdStrict13 = input.bool(true,  "Strict bar 13 (low <= close of countdown bar 8)", group=groupTD, tooltip="ON (default, DeMark's rule): bar 13 must ALSO have its low at or below the CLOSE of countdown bar 8. When that fails the count DEFERS — it holds at 12 and waits for a bar satisfying both legs. OFF prints a 13 on close<=low[2] alone, which is how most free scripts do it and why they print 13s early. On SPX daily this changed nothing in ten years; on faster symbols it will.")
+tdCancelOpp = input.bool(true, "Cancel the countdown on an opposite completed setup", group=groupTD)
+tdCancelTd  = input.bool(true, "Cancel the countdown on a close through TDST", group=groupTD)
+tdTdstOn   = input.bool(true,  "Draw the TDST levels", group=groupTD, tooltip="The completed setup's own boundary — the highest high of a buy setup (resistance) or the lowest low of a sell setup (support). Drawn as lines, so they cost no plot slots.")
+tdRowOn    = input.bool(true,  "Row in the valuation box (top left)", group=groupTD, tooltip="Rides in the existing top-left table rather than claiming a seventh corner — every corner is already spoken for and two tables in one corner overlap.")
+tdAlertOn  = input.bool(false, "Alert on a completed 9 or 13", group=groupTD, tooltip="Uses alert(), so it routes through the SAME single TradingView alert as everything else in this deck: condition 'Any alert() function call'. Fires only on a daily-or-higher chart, at bar close, because that is the only point at which a daily setup is actually complete.")
+tdAlPerfOnly = input.bool(false, "…9 alerts only when perfected", group=groupTD)
+tdColBuy   = input.color(#26A69A, "Buy", group=groupTD, inline="tdc")
+tdColSell  = input.color(#EF5350, "Sell", group=groupTD, inline="tdc")
+tdColCd    = input.color(#7E57C2, "Countdown", group=groupTD, inline="tdc")
+
+// Every value crosses as a FLOAT — a request.security tuple cannot mix types,
+// the same constraint that made vwapOk a float in f_zdState().
+f_tdPack(_strict, _cOpp, _cTd, _cdOnPass) =>
+    var float _bs   = 0.0
+    var float _ss   = 0.0
+    var float _cdB  = 0.0
+    var float _cdS  = 0.0
+    var float _actB = 0.0
+    var float _actS = 0.0
+    var float _b8   = na
+    var float _s8   = na
+    var float _tRes = na
+    var float _tSup = na
+    float _f13B = 0.0
+    float _f13S = 0.0
+    // ta.* stays at the top level: inside an if it would skip bars and drift.
+    float _h9 = ta.highest(high, 9)
+    float _l9 = ta.lowest(low, 9)
+    // Once a setup completes at 9 and the condition still holds, a NEW setup
+    // starts at 1 — it does not run on to 10. That restart is what makes
+    // consecutive 9s possible in a long trend, and it also guarantees a 9 is
+    // never true on two adjacent bars, which the edge detection below relies on.
+    _bs := close < close[4] ? (_bs >= 9.0 ? 1.0 : _bs + 1.0) : 0.0
+    _ss := close > close[4] ? (_ss >= 9.0 ? 1.0 : _ss + 1.0) : 0.0
+    bool _b9 = _bs == 9.0
+    bool _s9 = _ss == 9.0
+    float _bPerf = _b9 and math.min(low, low[1])   <= math.min(low[2], low[3])  ? 1.0 : 0.0
+    float _sPerf = _s9 and math.max(high, high[1]) >= math.max(high[2], high[3]) ? 1.0 : 0.0
+    if _b9
+        _tRes := _h9
+    if _s9
+        _tSup := _l9
+    if _cdOnPass
+        if _b9
+            _actB := 1.0
+            _cdB  := 0.0
+            _b8   := na
+        if _s9
+            _actS := 1.0
+            _cdS  := 0.0
+            _s8   := na
+        if _cOpp and _s9
+            _actB := 0.0
+            _cdB  := 0.0
+        if _cOpp and _b9
+            _actS := 0.0
+            _cdS  := 0.0
+        if _cTd and _actB > 0.5 and not na(_tRes) and close > _tRes
+            _actB := 0.0
+            _cdB  := 0.0
+        if _cTd and _actS > 0.5 and not na(_tSup) and close < _tSup
+            _actS := 0.0
+            _cdS  := 0.0
+        if _actB > 0.5 and close <= low[2]
+            float _cand = _cdB + 1.0
+            if _cand == 13.0
+                if not _strict or (not na(_b8) and low <= _b8)
+                    _cdB  := 13.0
+                    _f13B := 1.0
+                    _actB := 0.0
+            else
+                _cdB := _cand
+                if _cand == 8.0
+                    _b8 := close
+        if _actS > 0.5 and close >= high[2]
+            float _cand = _cdS + 1.0
+            if _cand == 13.0
+                if not _strict or (not na(_s8) and high >= _s8)
+                    _cdS  := 13.0
+                    _f13S := 1.0
+                    _actS := 0.0
+            else
+                _cdS := _cand
+                if _cand == 8.0
+                    _s8 := close
+    [_bs, _ss, _bPerf, _sPerf, _cdB, _cdS, _f13B, _f13S, _tRes, _tSup, _actB, _actS]
+
+[tdBs, tdSs, tdBperf, tdSperf, tdCdB, tdCdS, tdF13B, tdF13S, tdRes, tdSup, tdActB, tdActS] = request.security(syminfo.tickerid, "D", f_tdPack(tdStrict13, tdCancelOpp, tdCancelTd, tdCdOn), lookahead=barmerge.lookahead_off)
+
+tdIsDaily = timeframe.isdaily or timeframe.isweekly or timeframe.ismonthly
+tdDraw    = tdOn and (not tdDailyOnly or tdIsDaily)
+// Edge detection, so an intraday chart marks the DAY the count completed rather
+// than every minute of it. On a daily chart this is identical to the raw flag,
+// because the restart rule makes a 9 impossible on two adjacent bars.
+tdNew9B  = tdBs   == 9.0 and nz(tdBs[1])   != 9.0
+tdNew9S  = tdSs   == 9.0 and nz(tdSs[1])   != 9.0
+tdNew13B = tdF13B  > 0.5 and nz(tdF13B[1]) < 0.5
+tdNew13S = tdF13S  > 0.5 and nz(tdF13S[1]) < 0.5
+tdNewCnB = tdBs >= 1.0 and tdBs <= 8.0 and tdBs != nz(tdBs[1])
+tdNewCnS = tdSs >= 1.0 and tdSs <= 8.0 and tdSs != nz(tdSs[1])
+tdGap    = actGap
+
+f_tdMark(_fire, _txt, _col, _top, _hollow) =>
+    if _fire
+        label.new(bar_index, _top ? high + tdGap : low - tdGap, _txt, xloc=xloc.bar_index, yloc=yloc.price, style=_top ? label.style_label_down : label.style_label_up, size=size.tiny, color=_hollow ? color.new(_col, 70) : _col, textcolor=_hollow ? _col : color.white)
+
+if tdDraw
+    f_tdMark(tdShowAll and tdNewCnB, str.tostring(tdBs, "#"), tdColBuy,  false, true)
+    f_tdMark(tdShowAll and tdNewCnS, str.tostring(tdSs, "#"), tdColSell, true,  true)
+    f_tdMark(tdShow9  and tdNew9B,  "9",  tdColBuy,  false, tdPerfOn and tdBperf < 0.5)
+    f_tdMark(tdShow9  and tdNew9S,  "9",  tdColSell, true,  tdPerfOn and tdSperf < 0.5)
+    f_tdMark(tdShow13 and tdNew13B, "13", tdColCd,   false, false)
+    f_tdMark(tdShow13 and tdNew13S, "13", tdColCd,   true,  false)
+
+// Lines, not plots — the levels are current-value only, so a series would buy
+// nothing and cost two of the slots left in the budget.
+f_tdLine(_show, _y, _txt, _col) =>
+    var line  ln = na
+    var label lb = na
+    if barstate.islast
+        line.delete(ln)
+        label.delete(lb)
+        if _show and not na(_y)
+            ln := line.new(bar_index - 1, _y, bar_index + labelOffset, _y, xloc=xloc.bar_index, color=_col, style=line.style_dashed, width=1)
+            lb := label.new(bar_index + labelOffset, _y, _txt + "  " + str.tostring(_y, format.mintick), xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, size=size.small, textcolor=txtCol(_col), color=_col)
+    lb
+f_tdLine(tdDraw and tdTdstOn, tdRes, "TDST res", tdColSell)
+f_tdLine(tdDraw and tdTdstOn, tdSup, "TDST sup", tdColBuy)
+
+tdSetTxt = tdBs > 0 ? "BUY " + str.tostring(tdBs, "#") + "/9" + (tdBs == 9.0 ? (tdBperf > 0.5 ? " perf" : " unperf") : "") : tdSs > 0 ? "SELL " + str.tostring(tdSs, "#") + "/9" + (tdSs == 9.0 ? (tdSperf > 0.5 ? " perf" : " unperf") : "") : "—"
+tdCdTxt  = not tdCdOn ? "" : tdActB > 0.5 ? "  cd BUY " + str.tostring(tdCdB, "#") + "/13" + (tdCdB == 12.0 ? " (13 deferred)" : "") : tdActS > 0.5 ? "  cd SELL " + str.tostring(tdCdS, "#") + "/13" + (tdCdS == 12.0 ? " (13 deferred)" : "") : ""
+tdRowTxt = tdSetTxt + tdCdTxt + (tdIsDaily ? "" : "  (developing)")
+tdRowCol = tdBs == 9.0 ? #2E7D32 : tdSs == 9.0 ? #B71C1C : (tdActB > 0.5 or tdActS > 0.5) ? #4527A0 : #455a64
+
+// Alerts fire ONLY on a daily-or-higher chart at bar close: that is the only
+// moment a daily setup is genuinely complete. v6.44: alertOK on a daily chart
+// now tests the WALL clock plus the grace tail, not the bar timestamp.
+if tdOn and tdAlertOn and tdIsDaily and alertOK
+    if tdNew9B and (not tdAlPerfOnly or tdBperf > 0.5)
+        alert("TD BUY SETUP 9" + (tdBperf > 0.5 ? " (perfected)" : " (not perfected)") + " on " + syminfo.ticker + " " + str.tostring(close, format.mintick) + " — TDST resistance " + str.tostring(tdRes, format.mintick) + ". Exhaustion marker, not an entry: no measured edge on SPX daily (n=19, CI includes 0)." + alertStamp, alert.freq_once_per_bar_close)
+    if tdNew9S and (not tdAlPerfOnly or tdSperf > 0.5)
+        alert("TD SELL SETUP 9" + (tdSperf > 0.5 ? " (perfected)" : " (not perfected)") + " on " + syminfo.ticker + " " + str.tostring(close, format.mintick) + " — TDST support " + str.tostring(tdSup, format.mintick) + ". Exhaustion marker, not an entry: no measured edge on SPX daily (n=71, CI includes 0)." + alertStamp, alert.freq_once_per_bar_close)
+    if tdNew13B
+        alert("TD BUY COUNTDOWN 13 on " + syminfo.ticker + " " + str.tostring(close, format.mintick) + " — the deeper exhaustion count. Rare: only 3 completed on SPX daily in ten years, so it has never been testable. Context, not an entry." + alertStamp, alert.freq_once_per_bar_close)
+    if tdNew13S
+        alert("TD SELL COUNTDOWN 13 on " + syminfo.ticker + " " + str.tostring(close, format.mintick) + " — the deeper exhaustion count. Measured edge on SPX daily was not distinguishable from zero (n=21, CI includes 0). Context, not an entry." + alertStamp, alert.freq_once_per_bar_close)
+// ─── VALUATION & RATES — CALC + READOUT (0 plot slots) ───────────────────────
+valEpsTtm = request.financial(syminfo.tickerid, "EARNINGS_PER_SHARE_DILUTED", "TTM", ignore_invalid_symbol=true)
+[val10, val10p] = request.security(valY10Sym, "D", [close, close[1]], ignore_invalid_symbol=true, lookahead=barmerge.lookahead_off)
+var table valT = table.new(f_pos(valPos), 2, 5, border_width=1)
+if valOn and not uiHideBoxes and barstate.islast
+    table.clear(valT, 0, 0, 1, 4)
+    valPeV     = not na(valEpsTtm) and valEpsTtm > 0 ? close / valEpsTtm : na
+    valFwdV    = valFwdEps > 0 ? close / valFwdEps : na
+    valPegBase = valPegFwd ? valFwdV : valPeV
+    valPegV    = not na(valPegBase) and valGrw > 0 ? valPegBase / valGrw : na
+    valLblBg   = #37474f
+    valValBg   = #455a64
+    int valRow = 0
+    if valPeOn
+        valPeTxt = not na(valPeV) ? str.tostring(valPeV, "#.#") : na(valEpsTtm) ? "n/a — ETF/index" : "n/a — no profit"
+        table.cell(valT, 0, valRow, "P/E", text_size=size.small, text_color=color.white, bgcolor=valLblBg)
+        table.cell(valT, 1, valRow, valPeTxt, text_size=size.small, text_color=color.white, bgcolor=valValBg)
+        valRow += 1
+    if valFwdOn
+        valFwdTxt = not na(valFwdV) ? str.tostring(valFwdV, "#.#") : "set fwd EPS in settings"
+        table.cell(valT, 0, valRow, "FWD P/E", text_size=size.small, text_color=color.white, bgcolor=valLblBg)
+        table.cell(valT, 1, valRow, valFwdTxt, text_size=size.small, text_color=color.white, bgcolor=valValBg)
+        valRow += 1
+    if valPegOn
+        valPegTxt = not na(valPegV) ? str.tostring(valPegV, "#.##") + (valPegFwd ? " (fwd)" : "") : valGrw <= 0 ? "set growth % in settings" : "n/a — no P/E"
+        table.cell(valT, 0, valRow, "PEG", text_size=size.small, text_color=color.white, bgcolor=valLblBg)
+        table.cell(valT, 1, valRow, valPegTxt, text_size=size.small, text_color=color.white, bgcolor=valValBg)
+        valRow += 1
+    if valY10On
+        valBp    = na(val10) or na(val10p) ? na : math.round((val10 - val10p) * 100)
+        valBig   = not na(valBp) and math.abs(valBp) >= valY10Bp
+        valY10Bg = not valBig ? valValBg : valBp > 0 ? #B71C1C : #2E7D32
+        valY10Tx = na(val10) ? "n/a" : str.tostring(val10, "#.##") + "%" + (na(valBp) ? "" : "  " + (valBp > 0 ? "+" : "") + str.tostring(valBp, "#") + "bp")
+        table.cell(valT, 0, valRow, "US 10Y", text_size=size.small, text_color=color.white, bgcolor=valLblBg)
+        table.cell(valT, 1, valRow, valY10Tx, text_size=size.small, text_color=color.white, bgcolor=valY10Bg)
+        valRow += 1
+    if tdOn and tdRowOn
+        table.cell(valT, 0, valRow, "TD SEQ", text_size=size.small, text_color=color.white, bgcolor=valLblBg)
+        table.cell(valT, 1, valRow, tdRowTxt, text_size=size.small, text_color=color.white, bgcolor=tdRowCol)
+        valRow += 1
+// ─── 0DTE REGIME SCORE — CALC + TABLE + ALERT ────────────────────────────────
+// v6.28 — the security calls export the leg's STATE and nothing else; the score
+// itself is computed OUTSIDE by f_legAt(). One formula, one place, used for the
+// live score AND for every trial price in the solver — so the two can never
+// drift apart. (That drift is the exact bug class that has bitten this project
+// twice: Python-vs-Pine VWAP renormalization, and the SPX500 CFD.)
+// vwapOk crosses as a float because a tuple cannot mix types.
+f_zdState() =>
+    [macdLine, signalLine, _h] = ta.macd(close, 12, 26, 9)
+    vwapv = ta.vwap(hlc3)
+    bool vok = not na(vwapv) and timeframe.isintraday
+    // v6.37 — EVERY RECURSIVE TERM IS EXPORTED ONE BAR BACK, and that [1] is the
+    // whole fix. f_legAt() ADVANCES each of these by one step using the price it
+    // is handed. Exporting the CURRENT bar's EMA/RMA meant that step ran twice
+    // over the same close, so the reconstructed score led the real one — max
+    // error 2.44 score points, 34 bars in 340 off by more than 0.5, and
+    // directional, which is why the overlay hit a tier ~15 minutes before the
+    // companion pane on a rally. With the shift the reconstruction is EXACT.
+    // VWAP is deliberately NOT shifted: f_legAt only compares price against it,
+    // it does not advance it, so the current value is the correct one.
+    // close[1] goes out as the reference close for the RSI delta, for the same
+    // reason — the gain/loss for this bar is close - close[1]. An ELEVENTH value,
+    // the leg's LIVE close, rides along so the current score can be read off:
+    // on a historical bar a higher-TF leg's close is NOT the chart's close, so
+    // it has to come out of the same request rather than be assumed.
+    [ta.ema(close, 9)[1], ta.ema(close, 14)[1], ta.ema(close, 26)[1], ta.ema(close, 12)[1], signalLine[1], vok ? vwapv : close, ta.rma(math.max(close - close[1], 0.0), 14)[1], ta.rma(math.max(close[1] - close, 0.0), 14)[1], close[1], vok ? 1.0 : 0.0, close]
+// The score of one leg at ANY price p, from that leg's PRIOR-bar state. Each
+// recursive term is advanced exactly one step by p, so passing the leg's own
+// current close reproduces the native in-context score to the last decimal
+// (verified numerically, error 0.0000), and passing any other p answers "what
+// would the score be if this bar closed there" — which is what the isoline
+// solver needs. Before v6.37 the inputs were the CURRENT bar's state and this
+// function stepped them a second time.
+f_legAt(_p, _e9, _e14, _e26, _e12, _sg, _vw, _ag, _al, _c, _vo) =>
+    float q9  = _e9  + 2.0 / 10.0 * (_p - _e9)
+    float q14 = _e14 + 2.0 / 15.0 * (_p - _e14)
+    float q26 = _e26 + 2.0 / 27.0 * (_p - _e26)
+    float q12 = _e12 + 2.0 / 13.0 * (_p - _e12)
+    float st  = (q9 > q14 and q14 > q26) ? 1.0 : (q9 < q14 and q14 < q26) ? -1.0 : (q9 > q26 ? 0.4 : -0.4)
+    float ps  = _p > q26 ? 1.0 : -1.0
+    float vs  = _vo > 0.5 ? (_p > _vw ? 1.0 : -1.0) : 0.0
+    float na_ = (_ag * 13.0 + math.max(_p - _c, 0.0)) / 14.0
+    float nl_ = (_al * 13.0 + math.max(_c - _p, 0.0)) / 14.0
+    float rv  = nl_ <= 0 ? 100.0 : 100.0 - 100.0 / (1.0 + na_ / nl_)
+    float rs  = math.max(-1.0, math.min(1.0, (rv - 50.0) / 25.0))
+    float md  = q12 - q26
+    float sg2 = _sg + 2.0 / 10.0 * (md - _sg)
+    float ms  = md > sg2 ? 1.0 : -1.0
+    float mw  = zdWEma + zdWPrice + (_vo > 0.5 ? zdWVwap : 0.0) + zdWRsi + zdWMacd
+    mw == 0 ? 0.0 : (st * zdWEma + ps * zdWPrice + vs * zdWVwap + rs * zdWRsi + ms * zdWMacd) / mw * 10.0
+// v6.41 — THIS USED TO BE f_rsiOf(_ag, _al), READING THE SHIFTED AVERAGES RAW.
+// v6.37 made f_zdState export every recursive term one bar back so f_legAt
+// could advance it — correct, and the score became exact. But the RSI confirm
+// gate took the SAME shifted averages and converted them straight to an RSI
+// WITHOUT advancing them, so zdAvgRsi has been reading one bar stale ever
+// since. It matters in exactly one place and it is the worst possible place:
+// the exhaustion pullback branch tests avgRsi <= 30 on a snapback, which is
+// when RSI is climbing fastest. Simulated on a Wilder RSI through a V-bottom,
+// the two gates disagree on the bar RSI crosses 30 — the stale reading still
+// says 20.6 while the true one says 31.1. One bar, one direction, and it is
+// the bar the fire happens on.
+// The advance is the same two lines f_legAt already runs.
+f_rsiAt(_p, _ag, _al, _c) =>
+    float na_ = (_ag * 13.0 + math.max(_p - _c, 0.0)) / 14.0
+    float nl_ = (_al * 13.0 + math.max(_c - _p, 0.0)) / 14.0
+    nl_ <= 0 ? 100.0 : 100.0 - 100.0 / (1.0 + na_ / nl_)
+zdSymUsed = zdRthData ? ticker.modify(syminfo.tickerid, session.regular) : syminfo.tickerid
+[a9, a14, a26, a12, asg, avw, aag, aal, ac, avo, anow] = request.security(zdSymUsed, zdTF1, f_zdState())
+[b9, b14, b26, b12, bsg, bvw, bag, bal, bc, bvo, bnow] = request.security(zdSymUsed, zdTF2, f_zdState())
+[c9, c14, c26, c12, csg, cvw, cag, cal, cc, cvo, cnow] = request.security(zdSymUsed, zdTF3, f_zdState())
+[d9, d14, d26, d12, dsg, dvw, dag, dal, dc, dvo, dnow] = request.security(zdSymUsed, zdTF4, f_zdState())
+// v6.36 — FULL PRECISION IN THE DECISION PATH. These four used to be rounded to
+// 1dp HERE, and zdAvg was then built from the rounded values — so a display
+// convenience leaked into every machine downstream. Four legs each rounded to
+// 0.1 shift the average by up to +/-0.05, which is invisible almost always and
+// DECISIVE at a threshold. zdF* are the raw values and feed everything that
+// DECIDES. zdS* are rounded and feed only the table.
+zdF1 = f_legAt(anow, a9, a14, a26, a12, asg, avw, aag, aal, ac, avo)
+zdF2 = f_legAt(bnow, b9, b14, b26, b12, bsg, bvw, bag, bal, bc, bvo)
+zdF3 = f_legAt(cnow, c9, c14, c26, c12, csg, cvw, cag, cal, cc, cvo)
+zdF4 = f_legAt(dnow, d9, d14, d26, d12, dsg, dvw, dag, dal, dc, dvo)
+zdS1 = math.round(zdF1, 1), zdS2 = math.round(zdF2, 1)
+zdS3 = math.round(zdF3, 1), zdS4 = math.round(zdF4, 1)
+zdR1 = f_rsiAt(anow, aag, aal, ac), zdR2 = f_rsiAt(bnow, bag, bal, bc)
+zdR3 = f_rsiAt(cnow, cag, cal, cc), zdR4 = f_rsiAt(dnow, dag, dal, dc)
+zdOneMin = timeframe.isminutes and timeframe.multiplier == 1
+zdLive   = zdOn and (not zdOneMinOnly or zdOneMin)
+f_zdVote(_s) => _s > 1.0 ? 1 : _s < -1.0 ? -1 : 0
+zdAvg    = (zdF1 + zdF2 + zdF3 + zdF4) / 4.0
+zdAvgRsi = (zdR1 + zdR2 + zdR3 + zdR4) / 4.0
+// The votes decide the REGIME and the ALIGN count, so they take the raw legs.
+zdBulls  = (f_zdVote(zdF1) ==  1 ? 1 : 0) + (f_zdVote(zdF2) ==  1 ? 1 : 0) + (f_zdVote(zdF3) ==  1 ? 1 : 0) + (f_zdVote(zdF4) ==  1 ? 1 : 0)
+zdBears  = (f_zdVote(zdF1) == -1 ? 1 : 0) + (f_zdVote(zdF2) == -1 ? 1 : 0) + (f_zdVote(zdF3) == -1 ? 1 : 0) + (f_zdVote(zdF4) == -1 ? 1 : 0)
+zdRegime = zdBulls >= 3 ? "UPTREND" : zdBears >= 3 ? "DOWNTREND" : "RANGE"
+zdAlign  = math.max(zdBulls, zdBears)
+f_zdTfTxt(_tf)  => _tf == "60" ? "1H" : _tf == "120" ? "2H" : _tf == "240" ? "4H" : _tf == "D" or _tf == "W" or _tf == "M" ? _tf : _tf + "MIN"
+f_zdRegTxt(_s)  => _s > 1.0 ? "UPTREND" : _s < -1.0 ? "DOWNTREND" : "RANGE"
+f_zdRegCol(_s)  => _s > 1.0 ? color.new(color.green, 80) : _s < -1.0 ? color.new(color.red, 80) : color.new(color.gray, 80)
+var table zdT = table.new(f_pos(zdPos), 4, 6, border_width=1)
+f_zdRow(_row, _tfTxt, _s, _r) =>
+    table.cell(zdT, 0, _row, _tfTxt, text_color=chart.fg_color, text_size=size.small)
+    table.cell(zdT, 1, _row, f_zdRegTxt(_s), bgcolor=f_zdRegCol(_s), text_color=chart.fg_color, text_size=size.small)
+    table.cell(zdT, 2, _row, str.tostring(_s, "#.0"), text_color=chart.fg_color, text_size=size.small)
+    table.cell(zdT, 3, _row, str.tostring(_r, "#"), text_color=chart.fg_color, text_size=size.small)
+if zdLive and not uiHideBoxes and barstate.islast
+    table.cell(zdT, 0, 0, "TF",     bgcolor=color.new(color.gray, 60), text_color=color.white, text_size=size.small)
+    table.cell(zdT, 1, 0, "REGIME", bgcolor=color.new(color.gray, 60), text_color=color.white, text_size=size.small)
+    table.cell(zdT, 2, 0, "SCORE",  bgcolor=color.new(color.gray, 60), text_color=color.white, text_size=size.small)
+    table.cell(zdT, 3, 0, "RSI",    bgcolor=color.new(color.gray, 60), text_color=color.white, text_size=size.small)
+    f_zdRow(1, f_zdTfTxt(zdTF1), zdS1, zdR1)
+    f_zdRow(2, f_zdTfTxt(zdTF2), zdS2, zdR2)
+    f_zdRow(3, f_zdTfTxt(zdTF3), zdS3, zdR3)
+    f_zdRow(4, f_zdTfTxt(zdTF4), zdS4, zdR4)
+    table.cell(zdT, 0, 5, "AVG " + zdRegime, bgcolor=color.new(color.purple, 60), text_color=color.white, text_size=size.small)
+    table.cell(zdT, 1, 5, "ALIGN " + str.tostring(zdAlign) + "/4", bgcolor=color.new(color.purple, 60), text_color=color.white, text_size=size.small)
+    table.cell(zdT, 2, 5, str.tostring(zdAvg, "#.0"), bgcolor=color.new(color.purple, 60), text_color=color.white, text_size=size.small)
+    table.cell(zdT, 3, 5, "", bgcolor=color.new(color.purple, 60))
+// ─── 0DTE ALERT LAYER — EVENTS + REVERSAL STATE + DISPATCH ───────────────────
+zdEvBull = ta.crossover(zdAvg, zdThBull)
+zdEvBear = ta.crossunder(zdAvg, zdThBear)
+zdEvEdge = ta.crossunder(zdAvg, zdThBull) or ta.crossover(zdAvg, zdThBear)
+zdEvHiUp = ta.crossover(zdAvg, zdThHi)
+zdEvHiDn = ta.crossunder(zdAvg, -zdThHi)
+zdEvAl4  = zdAlign == 4 and zdAlign[1] != 4
+zdEvAlBk = zdAlign != 4 and zdAlign[1] == 4
+zdEvReg  = zdRegime != zdRegime[1]
+zdDivNow = (zdRegime == "UPTREND" and zdAvg < zdThBull) or (zdRegime == "DOWNTREND" and zdAvg > zdThBear)
+zdEvDiv  = zdDivNow and not zdDivNow[1]
+zdMomChg = zdAvg - zdAvg[zdMomLk]
+zdMomUpS = zdMomChg >= zdMomDelta
+zdMomDnS = zdMomChg <= -zdMomDelta
+zdEvMomU = zdMomUpS and not zdMomUpS[1]
+zdEvMomD = zdMomDnS and not zdMomDnS[1]
+var float zdPeakHi  = na
+var int   zdStallHi = 0
+var bool  zdDoneHi  = false
+var float zdPeakLo  = na
+var int   zdStallLo = 0
+var bool  zdDoneLo  = false
+zdNeutral = zdAvg < zdThBull and zdAvg > zdThBear
+if zdAvg >= zdThHi
+    if na(zdPeakHi) or zdAvg > zdPeakHi
+        zdPeakHi  := zdAvg
+        zdStallHi := 0
+    else
+        zdStallHi += 1
+if not na(zdPeakHi) and zdNeutral
+    zdPeakHi  := na
+    zdStallHi := 0
+    zdDoneHi  := false
+if zdAvg <= -zdThHi
+    if na(zdPeakLo) or zdAvg < zdPeakLo
+        zdPeakLo  := zdAvg
+        zdStallLo := 0
+    else
+        zdStallLo += 1
+if not na(zdPeakLo) and zdNeutral
+    zdPeakLo  := na
+    zdStallLo := 0
+    zdDoneLo  := false
+zdEvRevHi = not zdDoneHi and not na(zdPeakHi) and ((zdPeakHi - zdAvg >= zdRevDelta and zdAvgRsi >= zdARsiOB) or (zdAvg >= zdThHi and zdStallHi >= zdHoldBars))
+zdEvRevLo = not zdDoneLo and not na(zdPeakLo) and ((zdAvg - zdPeakLo >= zdRevDelta and zdAvgRsi <= zdARsiOS) or (zdAvg <= -zdThHi and zdStallLo >= zdHoldBars))
+if zdEvRevHi
+    zdDoneHi := true
+if zdEvRevLo
+    zdDoneLo := true
+f_zdFire(_ev, _txt) =>
+    string _msg = na
+    if zdJsonMsg
+        _msg := '{"event":"' + _ev + '","symbol":"' + syminfo.ticker + '","chart_tf":"' + timeframe.period + '","avg":' + str.tostring(zdAvg, "#.0") + ',"align":' + str.tostring(zdAlign) + ',"regime":"' + zdRegime + '","avg_rsi":' + str.tostring(zdAvgRsi, "#.0") + '}'
+    else
+        _msg := "0DTE " + _txt + " | avg " + str.tostring(zdAvg, "#.0") + " | align " + str.tostring(zdAlign) + "/4 | " + zdRegime + " | " + syminfo.ticker
+    alert(_msg + alertStamp, alert.freq_once_per_bar_close)
+// v6.40 — alertOK is the deck-wide market-hours gate; zdRthOnly is this block's
+// own older switch, kept because it is a saved input on existing charts. Both
+// apply. alertOK reads the New York clock directly, which is the more reliable
+// of the two on a broker CFD where session.ismarket is whatever the broker says.
+zdFireOK = zdAlertsOn and zdLive and alertOK and (not zdRthOnly or session.ismarket)
+if zdFireOK
+    if zdA1 and zdEvBull
+        f_zdFire("bias_bull", "bullish bias engaged (crossed +" + str.tostring(zdThBull, "#.#") + ")")
+    if zdA2 and zdEvBear
+        f_zdFire("bias_bear", "bearish bias engaged (crossed " + str.tostring(zdThBear, "#.#") + ")")
+    if zdA3 and zdEvEdge
+        f_zdFire("edge_lost", "edge lost — avg back inside the neutral band")
+    if zdA4 and zdEvHiUp
+        f_zdFire("conviction_up", "high conviction + (above +" + str.tostring(zdThHi, "#.#") + ")")
+    if zdA5 and zdEvHiDn
+        f_zdFire("conviction_dn", "high conviction - (below -" + str.tostring(zdThHi, "#.#") + ")")
+    if zdA6 and zdEvAl4
+        f_zdFire("align_4of4", "alignment 4/4 — all timeframes agree")
+    if zdA7 and zdEvAlBk
+        f_zdFire("align_broke", "alignment broke below 4/4 — pullback warning")
+    if zdA8 and zdEvReg
+        f_zdFire("regime_change", "regime changed to " + zdRegime)
+    if zdA9 and zdEvDiv
+        f_zdFire("divergence", "label vs score divergence — " + zdRegime + " label without threshold backing")
+    if zdA10 and zdEvMomU
+        f_zdFire("momentum_up", "momentum up >= " + str.tostring(zdMomDelta, "#.#") + " over " + str.tostring(zdMomLk) + " bars")
+    if zdA10 and zdEvMomD
+        f_zdFire("momentum_dn", "momentum down >= " + str.tostring(zdMomDelta, "#.#") + " over " + str.tostring(zdMomLk) + " bars")
+    if zdA11 and zdEvRevHi
+        f_zdFire("reversal_top", "reversal is near — extreme top exhausting (caution: down)")
+    if zdA11 and zdEvRevLo
+        f_zdFire("reversal_bottom", "reversal is near — extreme bottom exhausting (caution: up)")
+// ─── 0DTE CONTEXT — WINDOW · ZONES · CLIMAX · LTF · V-BOUNCE ─────────────────
+zdNyMin  = hour(time, "America/New_York") * 60 + minute(time, "America/New_York")
+// v6.35: zdEthMarks lifts the New York-session gate and defaults ON. Every
+// machine below hangs off zdInRth — zones, exhaustion, session extremes, the
+// day reset and the flag — so this one line decides whether ANY of them can
+// RUN outside 09:30-16:00.
+// v6.40: whether anything is SENT is now a separate question, answered by
+// alertOK at the dispatch below. Marks overnight, silence overnight.
+zdInRth  = zdEthMarks or (zdNyMin >= 570 and zdNyMin < 960)
+zdWinCol = zdNyMin < 615 ? #9e9e9e : zdNyMin < 660 ? #ffb300 : zdNyMin < 840 ? #2e7d32 : #ef6c00
+zdWinTxt = zdNyMin < 615 ? "EARLY — warnings only" : zdNyMin < 660 ? "BUILDING" : zdNyMin < 840 ? "PRIME — most reliable" : "LATE — moves fast"
+var bool zdPendReset = true
+if dayofmonth != dayofmonth[1]
+    zdPendReset := true
+zdDayStart = zdPendReset and zdInRth
+if zdDayStart
+    zdPendReset := false
+var float zdDayLo   = na
+var float zdDayHi   = na
+var float zdAvgAtLo = na
+var float zdAvgAtHi = na
+if zdInRth
+    if zdDayStart or na(zdDayLo)
+        zdDayLo   := low
+        zdDayHi   := high
+        zdAvgAtLo := zdAvg
+        zdAvgAtHi := zdAvg
+    else
+        if low < zdDayLo
+            zdDayLo   := low
+            zdAvgAtLo := zdAvg
+        if high > zdDayHi
+            zdDayHi   := high
+            zdAvgAtHi := zdAvg
+zdDivBot = zdInRth and not na(zdDayLo) and low  <= zdDayLo * (1 + 5 / 1e4) and zdAvg >= zdAvgAtLo + zdDivGap
+zdDivTop = zdInRth and not na(zdDayHi) and high >= zdDayHi * (1 - 5 / 1e4) and zdAvg <= zdAvgAtHi - zdDivGap
+zdRefVol = request.security(zdSpyTkr, timeframe.period, volume)
+zdSpyVol = zdVolChart and not na(volume) ? volume : zdRefVol
+var float[] zdVolBuf = array.new_float()
+float zdVolZ = 0.0
+if zdDayStart
+    array.clear(zdVolBuf)
+if zdInRth and not na(zdSpyVol)
+    if array.size(zdVolBuf) >= 30
+        zdSd = array.stdev(zdVolBuf)
+        zdVolZ := zdSd > 0 ? (zdSpyVol - array.avg(zdVolBuf)) / zdSd : 0.0
+    array.push(zdVolBuf, zdSpyVol)
+    if array.size(zdVolBuf) > 30
+        array.shift(zdVolBuf)
+zdClimaxNear = ta.highest(zdVolZ, 4) >= zdClimaxZ
+f_zdZoneTop(_th) =>
+    var bool dn = false
+    if zdInRth and zdNeutral
+        dn := false
+    fire = zdInRth and not dn and zdAvg >= _th
+    if fire
+        dn := true
+    fire
+f_zdZoneBot(_th) =>
+    var bool dn = false
+    if zdInRth and zdNeutral
+        dn := false
+    fire = zdInRth and not dn and zdAvg <= _th
+    if fire
+        dn := true
+    fire
+zdZT1 = f_zdZoneTop(zdTh1)
+zdZT2 = f_zdZoneTop(zdTh2)
+zdZT3 = f_zdZoneTop(zdTh3)
+zdZB1 = f_zdZoneBot(-zdTh1)
+zdZB2 = f_zdZoneBot(-zdTh2)
+zdZB3 = f_zdZoneBot(-zdTh3)
+f_zdExhTop(_th) =>
+    var float pk = na
+    var int   st = 0
+    var bool  dn = false
+    if zdInRth
+        if zdAvg >= _th
+            if na(pk) or zdAvg > pk
+                pk := zdAvg
+                st := 0
+            else
+                st += 1
+        if not na(pk) and zdNeutral
+            pk := na
+            st := 0
+            dn := false
+    fire = zdInRth and not dn and not na(pk) and ((pk - zdAvg >= zdRevDelta and zdAvgRsi >= zdARsiOB) or (zdAvg >= _th and st >= zdHoldBars))
+    if fire
+        dn := true
+    fire
+f_zdExhBot(_th) =>
+    var float pk = na
+    var int   st = 0
+    var bool  dn = false
+    if zdInRth
+        if zdAvg <= _th
+            if na(pk) or zdAvg < pk
+                pk := zdAvg
+                st := 0
+            else
+                st += 1
+        if not na(pk) and zdNeutral
+            pk := na
+            st := 0
+            dn := false
+    fire = zdInRth and not dn and not na(pk) and ((zdAvg - pk >= zdRevDelta and zdAvgRsi <= zdARsiOS) or (zdAvg <= _th and st >= zdHoldBars))
+    if fire
+        dn := true
+    fire
+zdET1 = f_zdExhTop(zdTh1)
+zdET2 = f_zdExhTop(zdTh2)
+zdET3 = f_zdExhTop(zdTh3)
+zdEB1 = f_zdExhBot(-zdTh1)
+zdEB2 = f_zdExhBot(-zdTh2)
+zdEB3 = f_zdExhBot(-zdTh3)
+// ── Episode extreme, mirroring what the tier machines latch internally. Once a
+// tier is armed every armed tier converges on the same running extreme, so one
+// tracker per side is faithful to all three. Re-armed only in the neutral band,
+// exactly like the machines, so the two can never disagree about an episode.
+var float zdBotPk = na
+var float zdTopPk = na
+if zdInRth
+    if zdAvg <= -zdTh1
+        zdBotPk := na(zdBotPk) ? zdAvg : math.min(zdBotPk, zdAvg)
+    if zdAvg >= zdTh1
+        zdTopPk := na(zdTopPk) ? zdAvg : math.max(zdTopPk, zdAvg)
+    if zdNeutral
+        zdBotPk := na
+        zdTopPk := na
+[e9, e14, e26, e12, esg, evw, eag, eal, ec, evo, enow] = request.security(zdSymUsed, "240", f_zdState())
+zdL1 = f_legAt(enow, e9, e14, e26, e12, esg, evw, eag, eal, ec, evo)
+[f9, f14, f26, f12, fsg, fvw, fag, fal, fc, fvo, fnow] = request.security(zdSymUsed, "D", f_zdState())
+zdL2 = f_legAt(fnow, f9, f14, f26, f12, fsg, fvw, fag, fal, fc, fvo)
+[g9, g14, g26, g12, gsg, gvw, gag, gal, gc, gvo, gnow] = request.security(zdSymUsed, "W", f_zdState())
+zdL3 = f_legAt(gnow, g9, g14, g26, g12, gsg, gvw, gag, gal, gc, gvo)
+[h9, h14, h26, h12, hsg, hvw, hag, hal, hc, hvo, hnow] = request.security(zdSymUsed, "M", f_zdState())
+zdL4 = f_legAt(hnow, h9, h14, h26, h12, hsg, hvw, hag, hal, hc, hvo)
+zdLtfN   = (na(zdL1) ? 0 : 1) + (na(zdL2) ? 0 : 1) + (na(zdL3) ? 0 : 1) + (na(zdL4) ? 0 : 1)
+zdLtfAvg = zdLtfN > 0 ? (nz(zdL1) + nz(zdL2) + nz(zdL3) + nz(zdL4)) / zdLtfN : na
+zdLtfUp  = zdLtfN == 4 and nz(zdL1) > 1 and nz(zdL2) > 1 and nz(zdL3) > 1 and nz(zdL4) > 1
+zdLtfDn  = zdLtfN == 4 and nz(zdL1) < -1 and nz(zdL2) < -1 and nz(zdL3) < -1 and nz(zdL4) < -1
+zdLtfTxt = na(zdLtfAvg) ? "n/a" : str.tostring(zdLtfAvg, "#.0") + (zdLtfUp ? "  all-UP" : zdLtfDn ? "  all-DOWN" : "  mixed") + (zdLtfN < 4 ? "  (" + str.tostring(zdLtfN) + "/4 legs)" : "")
+// zdVixOpen comes from the widened request in the EXPECTED MOVE block above,
+// which is what keeps the expected move free of any extra data request.
+var bool zdDnPrinted = false
+var bool zdUpPrinted = false
+if zdDayStart
+    zdDnPrinted := false
+    zdUpPrinted := false
+if zdInRth and zdAvg <= -zdThHi
+    zdDnPrinted := true
+if zdInRth and zdAvg >= zdThHi
+    zdUpPrinted := true
+zdIsSp      = str.contains(syminfo.ticker, "SPX") or str.contains(syminfo.ticker, "SPY") or (syminfo.type == "futures" and str.startswith(syminfo.ticker, "ES"))
+zdCallRisk  = zdFlagOn and zdDnPrinted and not na(zdVixOpen) and zdVixOpen < zdVixTh
+zdCallRiskNew = zdCallRisk and not zdCallRisk[1]
+zdFlagTxt = zdCallRisk ? (zdIsSp ? "V-BOUNCE — call side at risk" : "V-BOUNCE pattern — not validated on " + syminfo.ticker) : zdUpPrinted ? "+" + str.tostring(zdThHi, "#.#") + " printed — benign day" : "—"
+zdFlagCol = zdCallRisk ? (zdIsSp ? #880e4f : #757575) : zdUpPrinted ? #004d40 : #37474f
+// v6.38 — every 0DTE alert carries the live price and the day's move, so a
+// phone notification is readable without opening the chart. The day reference
+// is satyPiv, the SAME prior regular-session close the Saty levels are anchored
+// to, so "today" means the same thing in the alert as it does on the chart.
+zdMoveTxt = na(satyPiv) or satyPiv <= 0 ? "" : "  " + str.tostring((close / satyPiv - 1) * 100, "+#.00;-#.00") + "% today"
+zdTickTxt = syminfo.ticker + " " + str.tostring(close, format.mintick) + zdMoveTxt
+zdCtxGap = actGap
+zdSz = zdMarkSize == "Tiny" ? size.tiny : zdMarkSize == "Small" ? size.small : zdMarkSize == "Large" ? size.large : size.normal
+// v6.45 — COLLAPSED BY DEFAULT, LADDER ON REQUEST.
+//
+// The history here is worth keeping, because it is a lesson about verifying a
+// premise before acting on it. v6.41 collapsed a multi-tier bar to a single
+// chip. v6.42 REVERTED that to a ladder on the stated grounds that "the
+// companion pane draws every tier that fires" — which was never checked. A
+// live SPX500 screenshot then showed the pane drawing a single "Z3" on exactly
+// the bar this overlay drew a stacked C / B / A. v6.42's revert was fixing a
+// parity break that did not exist, and it created the real one it claimed to
+// be preventing.
+//
+// So: default is ONE chip per side per bar, the deepest tier that fired, which
+// matches the pane AND matches what the alert message has always said. The
+// ladder is still there behind a checkbox for the case where you want to see
+// that a bar was a three-tier jump.
+f_zdMark(_fire, _txt, _col, _top, _circle, _rung) =>
+    if _fire
+        float _g = zdCtxGap * (1.0 + 0.5 * (_rung - 1))
+        label.new(bar_index, _top ? high + _g : low - _g, _txt, xloc=xloc.bar_index, yloc=yloc.price, style=_circle ? label.style_label_center : (_top ? label.style_label_down : label.style_label_up), size=zdSz, color=_col, textcolor=txtCol(_col))
+// The deepest tier that fired on THIS bar, per side, 0 for none. Identical to
+// the expression the alert dispatch already uses to decide which number to put
+// in the message — deliberately, so the chip and the notification can never
+// disagree about which tier this bar was.
+//
+// WHY MORE THAN ONE TIER FIRES AT ONCE. The three tiers are one-shots that
+// re-arm only when the score falls back into the -4..+4 neutral band. Once
+// re-armed, a score that runs from neutral through +7, +8 and +8.5 inside a
+// bar or two crosses all three thresholds on the same bar, so all three fire
+// together. The exhaustion tiers do the same thing through the PULLBACK
+// branch, because all three share one running extreme.
+//
+// The one case that is genuinely different is the STALL branch: each tier
+// counts stall bars inside ITS OWN zone, so a score that sits under -7.0 for
+// six bars without ever holding under -8.5 fires tier 1 alone. Turn the ladder
+// on if you want to see that distinction on the chart.
+zdZTopN = zdZT3 ? 3 : zdZT2 ? 2 : zdZT1 ? 1 : 0
+zdZBotN = zdZB3 ? 3 : zdZB2 ? 2 : zdZB1 ? 1 : 0
+zdETopN = zdET3 ? 3 : zdET2 ? 2 : zdET1 ? 1 : 0
+zdEBotN = zdEB3 ? 3 : zdEB2 ? 2 : zdEB1 ? 1 : 0
+f_zdTierTxt(_n, _alpha) => _n == 3 ? (_alpha ? "C" : "3") : _n == 2 ? (_alpha ? "B" : "2") : (_alpha ? "A" : "1")
+if zdLive and zdZoneOn
+    if zdMarkLadder
+        f_zdMark(zdZT1, "A", zdZoneCol, true,  true,  1)
+        f_zdMark(zdZT2, "B", zdZoneCol, true,  true,  2)
+        f_zdMark(zdZT3, "C", zdZoneCol, true,  true,  3)
+        f_zdMark(zdZB1, "A", zdZoneCol, false, true,  1)
+        f_zdMark(zdZB2, "B", zdZoneCol, false, true,  2)
+        f_zdMark(zdZB3, "C", zdZoneCol, false, true,  3)
+    else
+        f_zdMark(zdZTopN > 0, f_zdTierTxt(zdZTopN, true), zdZoneCol, true,  true, 1)
+        f_zdMark(zdZBotN > 0, f_zdTierTxt(zdZBotN, true), zdZoneCol, false, true, 1)
+if zdLive and zdExhOn
+    if zdMarkLadder
+        f_zdMark(zdET1, "1", zdExhCol, true,  false, 1)
+        f_zdMark(zdET2, "2", zdExhCol, true,  false, 2)
+        f_zdMark(zdET3, "3", zdExhCol, true,  false, 3)
+        f_zdMark(zdEB1, "1", zdExhCol, false, false, 1)
+        f_zdMark(zdEB2, "2", zdExhCol, false, false, 2)
+        f_zdMark(zdEB3, "3", zdExhCol, false, false, 3)
+    else
+        f_zdMark(zdETopN > 0, f_zdTierTxt(zdETopN, false), zdExhCol, true,  false, 1)
+        f_zdMark(zdEBotN > 0, f_zdTierTxt(zdEBotN, false), zdExhCol, false, false, 1)
+zdAmpTop = zdClimOn and (zdET1 or zdET2 or zdET3) and (zdClimaxNear or zdDivTop)
+zdAmpBot = zdClimOn and (zdEB1 or zdEB2 or zdEB3) and (zdClimaxNear or zdDivBot)
+if zdLive and zdAmpTop
+    label.new(bar_index, high + zdCtxGap * 1.75, "", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_diamond, size=zdSz, color=#ff8f00, textcolor=#ff8f00)
+if zdLive and zdAmpBot
+    label.new(bar_index, low - zdCtxGap * 1.75, "", xloc=xloc.bar_index, yloc=yloc.price, style=label.style_diamond, size=zdSz, color=#ff8f00, textcolor=#ff8f00)
+// ─── SCORE-TO-PRICE — EXACT composite solve (v6.28) ─────────────────────────
+// v6.27 solved the four-leg average by LINEARISING each leg. That is wrong in a
+// way that always points the same direction: every leg SATURATES — rsiSig clamps
+// at +/-1 and the leg score at +/-10 — but a linear slope has no cap, so a fast
+// 2-minute leg kept contributing long past the point it could move at all. The
+// sum was too big, the required move came out too small, and the line hugged
+// price. Measured on the decade cache: the true level sits 1.4x-1.5x FURTHER.
+// Now the four legs export STATE and the real average is bisected directly.
+f_avgAt(_p) =>
+    (f_legAt(_p, a9, a14, a26, a12, asg, avw, aag, aal, ac, avo) + f_legAt(_p, b9, b14, b26, b12, bsg, bvw, bag, bal, bc, bvo) + f_legAt(_p, c9, c14, c26, c12, csg, cvw, cag, cal, cc, cvo) + f_legAt(_p, d9, d14, d26, d12, dsg, dvw, dag, dal, dc, dvo)) / 4.0
+// One band spanning both sides of price: the isoline crosses over whenever the
+// score enters the zone (v6.27's lesson). The score is monotone in price, so
+// there is exactly one crossing and it is bracketed iff avg(lo) <= t <= avg(hi).
+f_iso(_t) =>
+    float lo = close * 0.95
+    float hi = close * 1.05
+    float r  = na
+    if zdLive and zdPxOn and bar_index >= last_bar_index - zdPxBars
+        if f_avgAt(lo) <= _t and f_avgAt(hi) >= _t
+            for i = 0 to 17
+                float m = (lo + hi) / 2.0
+                if f_avgAt(m) > _t
+                    hi := m
+                else
+                    lo := m
+                r := m
+    r
+zdPxDn = f_iso(-zdPxTh)
+zdPxUp = f_iso( zdPxTh)
+zdPxDnOk = not na(zdPxDn)
+zdPxUpOk = not na(zdPxUp)
+// ── EXHAUSTION-FIRE LEVEL ────────────────────────────────────────────────────
+// The pullback branch of the exhaustion machines fires when the score RECOVERS
+// zdRevDelta from the episode extreme, with the average RSI confirming. The
+// price half of that is the same isoline, aimed at (extreme + delta) instead of
+// a fixed threshold — so this is where the 1/2/3 would print, not a fixed level.
+// It only exists while an episode is armed, and the two sides are mutually
+// exclusive, so ONE plot covers it. The RSI leg is a separate gate and is NOT in
+// the price: the readout says whether it currently confirms, because a level
+// that cannot fire should not look like one that can.
+zdExhTgtB = na(zdBotPk) ? na : zdBotPk + zdRevDelta
+zdExhTgtT = na(zdTopPk) ? na : zdTopPk - zdRevDelta
+zdPxExhB  = not zdExhPxOn or na(zdExhTgtB) ? na : f_iso(zdExhTgtB)
+zdPxExhT  = not zdExhPxOn or na(zdExhTgtT) ? na : f_iso(zdExhTgtT)
+zdPxExh   = na(zdPxExhB) ? zdPxExhT : zdPxExhB
+zdExhSide = not na(zdPxExhB) ? "BOT" : not na(zdPxExhT) ? "TOP" : ""
+zdExhRsiOk = zdExhSide == "BOT" ? zdAvgRsi <= zdARsiOS : zdExhSide == "TOP" ? zdAvgRsi >= zdARsiOB : false
+zdExhTxt  = na(zdPxExh) ? "no episode armed" : str.tostring(zdPxExh, format.mintick) + "  " + zdExhSide + (zdExhRsiOk ? "  RSI confirms" : "  RSI " + str.tostring(zdAvgRsi, "#") + " — needs " + (zdExhSide == "BOT" ? "<=" + str.tostring(zdARsiOS, "#") : ">=" + str.tostring(zdARsiOB, "#")))
+// A POSITIVE % on the lower line means the score is already in the zone and that
+// number is where it would climb back out — worth seeing, not worth hiding.
+zdPxDnTxt = zdPxDnOk ? str.tostring(zdPxDn, format.mintick) + "  (" + str.tostring((zdPxDn / close - 1) * 100, "+#.00;-#.00") + "%)" : "—"
+zdPxUpTxt = zdPxUpOk ? str.tostring(zdPxUp, format.mintick) + "  (" + str.tostring((zdPxUp / close - 1) * 100, "+#.00;-#.00") + "%)" : "—"
+f_zdPxExhLine(_show, _y, _txt) =>
+    var line  ln = na
+    var label lb = na
+    if barstate.islast
+        line.delete(ln)
+        label.delete(lb)
+        if _show and not na(_y)
+            ln := line.new(bar_index - 1, _y, bar_index + labelOffset, _y, xloc=xloc.bar_index, color=zdExhPxCol, style=line.style_dashed, width=1)
+            lb := label.new(bar_index + labelOffset, _y, _txt, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, size=size.small, textcolor=txtCol(zdExhPxCol), color=zdExhPxCol)
+    lb
+f_zdPxLine(_show, _y, _txt) =>
+    var line  ln = na
+    var label lb = na
+    if barstate.islast
+        line.delete(ln)
+        label.delete(lb)
+        if _show and not na(_y)
+            ln := line.new(bar_index - 1, _y, bar_index + labelOffset, _y, xloc=xloc.bar_index, color=zdPxCol, style=line.style_dotted, width=1)
+            lb := label.new(bar_index + labelOffset, _y, _txt, xloc=xloc.bar_index, yloc=yloc.price, style=label.style_label_left, size=size.small, textcolor=txtCol(zdPxCol), color=zdPxCol)
+    lb
+// The only plot() calls in the 0DTE half — 1 slot each (the colour comes from an
+// input, so it is a simple colour, not a series colour, which would cost 2).
+// style_linebr so the bars where no level exists render as a GAP rather than a
+// straight line joining two unrelated points: "unreachable" must look empty.
+pZdLo = plot(zdLive and zdPxOn and zdPxLine and zdPxDnOk ? zdPxDn : na, title="Score lower level", color=zdPxCol, style=plot.style_linebr, linewidth=1)
+pZdHi = plot(zdLive and zdPxOn and zdPxLine and zdPxUpOk ? zdPxUp : na, title="Score upper level", color=zdPxCol, style=plot.style_linebr, linewidth=1)
+// The cloud. The colour is INPUT-qualified, not series, so this stays a 1-slot
+// fill — a colour that changed with price would cost 2 and the information is
+// already there: you can see price leave the band.
+fill(pZdLo, pZdHi, color = zdLive and zdPxOn and zdPxFill ? color.new(zdPxCol, 88) : na, title="Score cloud")
+plot(zdLive and zdPxOn and zdPxLine and not na(zdPxExh) ? zdPxExh : na, title="Exhaustion fire level", color=zdExhPxCol, style=plot.style_linebr, linewidth=2)
+f_zdPxExhLine(zdLive and zdPxOn and not na(zdPxExh), zdPxExh, "exhaustion " + zdExhSide + " prints near " + str.tostring(zdPxExh, format.mintick) + " (marker, NOT an entry)")
+f_zdPxLine(zdLive and zdPxOn and zdPxDnOk, zdPxDn, "score -" + str.tostring(zdPxTh, "#.#") + " near " + str.tostring(zdPxDn, format.mintick))
+f_zdPxLine(zdLive and zdPxOn and zdPxUpOk, zdPxUp, "score +" + str.tostring(zdPxTh, "#.#") + " near " + str.tostring(zdPxUp, format.mintick))
+// ── Context readout. v6.22 added the ALERTS row: this deck has shipped versions
+// where the marks drew and nothing was sent, and the chart gave no clue. v6.40
+// adds the market-hours state to the same row, because a silent night is now a
+// DECISION and the row is where a decision like that has to be visible.
+zdAlHeld = alertsRthOnly and not alertOK
+zdAlTxt = zdMute ? "MUTED — nothing will be sent" : zdAlHeld ? (alertShut ? "US MARKET HOLIDAY — nothing will be sent today" : "MARKET HOURS ONLY — holding until 09:30 ET") : (zdAlertE ? (zdAlExhMin > 1 ? "exh " + str.tostring(zdAlExhMin) + "+" : "exh 1/2/3") + (zdAlExhAmp ? " +amp only" : "") : "") + (zdAlertZ ? (zdAlertE ? " · " : "") + "zone A/B/C" : "") + (zdAlertV ? ((zdAlertE or zdAlertZ) ? " · " : "") + "V-BOUNCE" : "") + (zdEthMarks ? "  [24h marks]" : "")
+zdAlNone = not zdAlertE and not zdAlertZ and not zdAlertV
+zdAlBg   = zdMute or zdAlNone ? #B71C1C : zdAlHeld ? #EF6C00 : #2E7D32
+var table zdCtxT = table.new(f_pos(zdCtxPos), 2, 8, border_width=1)
+if zdLive and zdCtxOn and not uiHideBoxes and barstate.islast
+    table.cell(zdCtxT, 0, 0, "0DTE", text_size=size.small, text_color=color.white, bgcolor=#263238)
+    table.cell(zdCtxT, 1, 0, str.tostring(zdAvg, "#.0") + "  " + zdRegime, text_size=size.small, text_color=color.white, bgcolor=#263238)
+    table.cell(zdCtxT, 0, 1, "WINDOW", text_size=size.small, text_color=color.white, bgcolor=#37474f)
+    table.cell(zdCtxT, 1, 1, zdInRth ? zdWinTxt : "closed", text_size=size.small, text_color=color.white, bgcolor=zdInRth ? zdWinCol : #37474f)
+    if zdLtfOn
+        table.cell(zdCtxT, 0, 2, "LTF", text_size=size.small, text_color=color.white, bgcolor=#37474f)
+        table.cell(zdCtxT, 1, 2, zdLtfTxt, text_size=size.small, text_color=color.white, bgcolor=#37474f)
+    table.cell(zdCtxT, 0, 3, "FLAG", text_size=size.small, text_color=color.white, bgcolor=#37474f)
+    table.cell(zdCtxT, 1, 3, zdFlagTxt, text_size=size.small, text_color=color.white, bgcolor=zdFlagCol)
+    table.cell(zdCtxT, 0, 4, "ALERTS", text_size=size.small, text_color=color.white, bgcolor=#37474f)
+    table.cell(zdCtxT, 1, 4, zdAlNone and not zdMute and not zdAlHeld ? "none enabled" : zdAlTxt, text_size=size.small, text_color=color.white, bgcolor=zdAlBg)
+    if zdPxOn
+        table.cell(zdCtxT, 0, 5, "PRICE ALERT AT", text_size=size.small, text_color=color.white, bgcolor=#37474f)
+        table.cell(zdCtxT, 1, 5, "-" + str.tostring(zdPxTh, "#.#") + " @ " + zdPxDnTxt + "   +" + str.tostring(zdPxTh, "#.#") + " @ " + zdPxUpTxt, text_size=size.small, text_color=txtCol(zdPxCol), bgcolor=zdPxCol)
+    if zdExhPxOn
+        table.cell(zdCtxT, 0, 6, "EXH PRINTS AT", text_size=size.small, text_color=color.white, bgcolor=#37474f)
+        table.cell(zdCtxT, 1, 6, zdExhTxt, text_size=size.small, text_color=txtCol(zdExhPxCol), bgcolor=na(zdPxExh) ? #37474f : zdExhPxCol)
+    // v6.43 — the version and the clock the gate is actually reading, side by
+    // side with what it decided. This row is the answer to "is my chart even
+    // running the build I think it is": compare it against the stamp inside
+    // the notification on your phone.
+    table.cell(zdCtxT, 0, 7, "GATE", text_size=size.small, text_color=color.white, bgcolor=#37474f)
+    table.cell(zdCtxT, 1, 7, ALERTVER + " · " + f_pad2(hour(time, "America/New_York")) + ":" + f_pad2(minute(time, "America/New_York")) + " ET · " + (not alertsRthOnly ? "24h (gate off)" : alertShut ? "MARKET HOLIDAY" : alertOK ? (alertHalf ? "SENDING (half day, 13:00)" : "SENDING") : (alertHalf ? "HOLDING (half day, 13:00)" : "HOLDING")), text_size=size.small, text_color=color.white, bgcolor=not alertsRthOnly ? #B71C1C : alertShut ? #B71C1C : alertOK ? #2E7D32 : #EF6C00)
+// ── Alerts (alert() — no plot cost, same single TradingView alert).
+// v6.40 — alertOK is the market-hours gate. Note what it does NOT do: the
+// machines above have already run and latched, so a tier that fires at 3am has
+// drawn its mark and consumed its one-shot. The alert is dropped, not deferred.
+if zdLive and zdCtxAlerts and alertOK
+    if zdAlZone and (zdZT1 or zdZT2 or zdZT3)
+        alert("0DTE stretched UP — zone " + (zdZT3 ? "C" : zdZT2 ? "B" : "A") + " entered" + (zdClimaxNear ? " +climax" : "") + " | avg " + str.tostring(zdAvg, "#.0") + " | " + zdTickTxt + alertStamp, alert.freq_once_per_bar_close)
+    if zdAlZone and (zdZB1 or zdZB2 or zdZB3)
+        alert("0DTE stretched DOWN — zone " + (zdZB3 ? "C" : zdZB2 ? "B" : "A") + " entered" + (zdClimaxNear ? " +climax" : "") + " | avg " + str.tostring(zdAvg, "#.0") + " | " + zdTickTxt + alertStamp, alert.freq_once_per_bar_close)
+    // Deepest tier that fired on THIS bar, 0 if none. The floor compares against
+    // it, so tier 3 alone gets through when the knob is set to 3 — and a bar
+    // where 1, 2 and 3 all fire still reports as 3, which is what the message
+    // already said.
+    if zdAlExh and (zdET3 ? 3 : zdET2 ? 2 : zdET1 ? 1 : 0) >= zdAlExhMin and (not zdAlExhAmp or zdClimaxNear or zdDivTop)
+        alert("0DTE up stretch TIRING — exhaustion " + (zdET3 ? "3" : zdET2 ? "2" : "1") + (zdClimaxNear ? " +climax" : "") + (zdDivTop ? " +divergence" : "") + " | avg " + str.tostring(zdAvg, "#.0") + " | " + zdTickTxt + alertStamp, alert.freq_once_per_bar_close)
+    if zdAlExh and (zdEB3 ? 3 : zdEB2 ? 2 : zdEB1 ? 1 : 0) >= zdAlExhMin and (not zdAlExhAmp or zdClimaxNear or zdDivBot)
+        alert("0DTE down stretch TIRING — exhaustion " + (zdEB3 ? "3" : zdEB2 ? "2" : "1") + (zdClimaxNear ? " +climax" : "") + (zdDivBot ? " +divergence" : "") + " | avg " + str.tostring(zdAvg, "#.0") + " | " + zdTickTxt + alertStamp, alert.freq_once_per_bar_close)
+    if zdAlFlag and zdCallRiskNew
+        alert("0DTE V-BOUNCE" + (zdIsSp ? " — score printed " + str.tostring(-zdThHi, "#.#") + " with the gate open at " + str.tostring(zdVixOpen, "#.##") + ": price often rips back UP, so the CALL side carries the risk today" : " pattern — NOT validated on " + syminfo.ticker) + " | " + zdTickTxt + alertStamp, alert.freq_once_per_bar_close)
